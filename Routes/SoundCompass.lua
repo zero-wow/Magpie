@@ -8,21 +8,12 @@ addon.VignetteRadarSoundCompass = Compass
 
 local WORDS = { ahead = "Ahead", left = "Left", right = "Right", behind = "Behind" }
 
-local function Safe(value)
-    if type(issecretvalue) ~= "function" then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and not secret
-end
-
-local function Field(record, key)
-    if type(record) ~= "table" or not Safe(record) then return nil end
-    local ok, value = pcall(function() return record[key] end)
-    return ok and Safe(value) and value or nil
-end
+local Safe, Field = addon.Secret.Safe, addon.Secret.Field
+local SecretNumber = addon.Secret.Number
 
 local function Number(value, default, minimum, maximum)
-    if not Safe(value) or type(value) ~= "number" or value ~= value
-        or value == math.huge or value == -math.huge then return default end
+    value = SecretNumber(value)
+    if value == nil then return default end
     return math.max(minimum, math.min(maximum, value))
 end
 

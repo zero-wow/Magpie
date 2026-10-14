@@ -12,37 +12,25 @@ local MAX_RECORDS, MAX_STARTS, MAX_RESULTS = 64, 32, 128
 local cache, order, currentMap, cursor = {}, {}, nil, 1
 local context, logItems, logCursor, logCount, logRefreshAt = nil, {}, nil, 0, 0
 local nextMapScanAt = 0
+-- Candidates() is rebuilt only after the pool data changes (revision),
+-- the quest-start setting flips, or a listed map entry expires.
+local revision, candidates, candidatesRevision, candidatesStarts, candidatesUntil = 0, nil, -1, nil, 0
 
-local function IsSecret(value)
-    return type(issecretvalue) == "function" and issecretvalue(value)
+local function Changed() revision = revision + 1 end
+
+-- /vrtrace (Core/Trace.lua): pool scans and candidate rebuilds log as "pool".
+local TraceLib = addon.Trace
+local function Trace(fmt, ...)
+    if TraceLib then TraceLib.Log("pool", fmt, ...) end
 end
 
-local function Number(value)
-    if IsSecret(value) then return nil end
-    return type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge and value or nil
-end
-
-local function Field(record, key)
-    if IsSecret(record) or type(record) ~= "table" then return nil end
-    local ok, value = pcall(function() return record[key] end)
-    return ok and not IsSecret(value) and value or nil
-end
+local IsSecret, Number = addon.Secret.IsSecret, addon.Secret.Number
+local Field, Call = addon.Secret.Field, addon.Secret.Call
 
 local function Length(list)
     if IsSecret(list) or type(list) ~= "table" then return 0 end
     local ok, count = pcall(function() return #list end)
     return ok and Number(count) or 0
-end
-
-local function Call(owner, key, ...)
-    if type(owner) ~= "table" then return nil end
-    local callback = owner[key]
-    if type(callback) ~= "function" then return nil end
-    local ok, a, b, c = pcall(callback, ...)
-    if ok and not (IsSecret(a) or IsSecret(b) or IsSecret(c)) then
-        return a, b, c
-    end
 end
 
 local function Now()
@@ -84,6 +72,7 @@ local function Continent(mapID)
 end
 
 local function BuildOrder(mapID)
+    Changed()
     currentMap, order, cursor = mapID, {}, 1
     local continent = Continent(mapID)
     if not continent or type(C_Map.GetMapChildrenInfo) ~= "function" then return end
@@ -165,6 +154,7 @@ local function ScanLog()
     if not C_QuestLog then return end
     local now = Now()
     if not logCursor and now < logRefreshAt then return end
+    Changed()
     if not logCursor then
         logItems, logCursor = {}, 1
         logCount = math.min(Number(Call(C_QuestLog, "GetNumQuestLogEntries")) or 0, 128)
@@ -193,6 +183,7 @@ local function ScanLog()
 end
 
 function API.Invalidate(reason)
+    Changed()
     logItems, logCursor, logRefreshAt = {}, nil, 0
     if reason == "map" then
         currentMap, nextMapScanAt = nil, 0
@@ -204,6 +195,10 @@ function API.Invalidate(reason)
         entry.emptyRetries = 0
     end
 end
+if addon.Bus then
+    addon.Bus.On("MAP_CHANGED", function() API.Invalidate("map") end)
+    addon.Bus.On("QUEST_CHANGED", function() API.Invalidate("quest") end)
+end
 
 function API.Bind(mapID, player, mapToWorld, mapVector, settings)
     if not (Number(mapID) and type(player) == "table"
@@ -214,6 +209,7 @@ function API.Bind(mapID, player, mapToWorld, mapVector, settings)
     if context and context.mapID ~= mapID then
         logItems, logCursor, logRefreshAt = {}, nil, 0
     end
+    Changed()
     context = { mapID = mapID, player = player, mapToWorld = mapToWorld,
         mapVector = mapVector, settings = settings }
 end
@@ -240,6 +236,7 @@ function API.Tick(force)
     if not force and not (addon.VignetteRadarWorldFocus
         and addon.VignetteRadarWorldFocus.WantsQuestPool
         and addon.VignetteRadarWorldFocus.WantsQuestPool()) then return end
+    local before = #logItems
     if currentMap ~= context.mapID then BuildOrder(context.mapID) end
     ScanLog()
     local now = Now()
@@ -256,37 +253,50 @@ function API.Tick(force)
                 context.settings.vignetteRadarAutoRouteQuestStarts ~= false)
             local emptyRetries = #items == 0
                 and ((previous and previous.emptyRetries or 0) + 1) or 0
+            Changed()
             cache[mapID] = { items = items,
                 emptyRetries = emptyRetries,
                 expires = now + (#items > 0 and 120
                     or emptyRetries == 1 and 12 or 90) }
             scanned = scanned + 1
+            Trace("Tick scanned map %s: %s points (empty retries %s)", mapID, #items, emptyRetries)
         end
     end
+    Trace("Tick force=%s map=%s maps=%s scanned=%s log=%s->%s (%s)", force, context.mapID, #order,
+        scanned, before, #logItems, logCursor and ("reading " .. logCursor .. "/" .. logCount) or "log done")
 end
 
+-- The returned list is shared until the pool changes; callers only read it.
 function API.Candidates()
-    local result = {}
     if not context or context.settings.vignetteRadarAutoRouteNearbyZones == false then
-        return result
+        return {}
     end
+    local starts = context.settings.vignetteRadarAutoRouteQuestStarts ~= false
+    local now = Now()
+    if candidates and candidatesRevision == revision and candidatesStarts == starts
+        and now < candidatesUntil then
+        return candidates
+    end
+    local result, validUntil = {}, math.huge
+    candidates, candidatesRevision, candidatesStarts = result, revision, starts
     for _, item in ipairs(logItems) do
-        if #result >= MAX_RESULTS then return result end
+        if #result >= MAX_RESULTS then candidatesUntil = validUntil; return result end
         result[#result + 1] = item
     end
-    local now = Now()
     for _, map in ipairs(order) do
         local entry = cache[map.id]
         if entry and entry.expires > now then
+            if entry.expires < validUntil then validUntil = entry.expires end
             for _, item in ipairs(entry.items) do
-                if #result >= MAX_RESULTS then return result end
-                if not item.availableStart
-                    or context.settings.vignetteRadarAutoRouteQuestStarts ~= false then
+                if #result >= MAX_RESULTS then candidatesUntil = validUntil; return result end
+                if not item.availableStart or starts then
                     result[#result + 1] = item
                 end
             end
         end
     end
+    candidatesUntil = validUntil
+    Trace("Candidates rebuilt: %s (log %s, starts %s, revision %s)", #result, #logItems, starts, revision)
     return result
 end
 

@@ -39,6 +39,10 @@ GetPlayerFacing = function() return 0 end
 
 local settings = { vignetteRadarEnabled = true, vignetteRadarHideWhenEmpty = true, vignetteRadarRange = 450 }
 local addon = { GetSettings = function() return settings end }
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Bus.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Points.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Focus.lua"))("VignetteRadar", addon)
 assert(loadfile(sourcePath))("VignetteRadar", addon)
 
 local T = assert(addon.VignetteRadarTesting, "module must expose its pure test boundary")
@@ -92,8 +96,8 @@ assert(math.abs(turnedX) < 0.0001 and math.abs(turnedY - 20) < 0.0001,
 assert(eventFrame.events.VIGNETTES_UPDATED and eventFrame.events.VIGNETTE_MINIMAP_UPDATED,
     "radar must react to both vignette update events")
 assert(type(SlashCmdList.VIGNETTERADAR) == "function", "radar slash command must be installed")
-assert(SLASH_VIGNETTERADAR1 == "/vr" and SLASH_VIGNETTERADAR4 == "/whradar",
-    "the short command must be primary while the old Waffle House alias remains available")
+assert(SLASH_VIGNETTERADAR1 == "/magpie" and SLASH_VIGNETTERADAR2 == "/vr" and SLASH_VIGNETTERADAR3 == nil,
+    "/magpie is primary, /vr stays as the short alias, the old aliases are gone")
 
 local sourceFile = assert(io.open(sourcePath, "rb"))
 local source = sourceFile:read("*a")

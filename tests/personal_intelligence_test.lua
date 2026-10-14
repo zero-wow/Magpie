@@ -1,7 +1,7 @@
 local addon = {}
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile("Data/WarbandBoard.lua"))("VignetteRadar", addon)
 assert(loadfile("Data/ResetPlanner.lua"))("VignetteRadar", addon)
-assert(loadfile("Data/CollectionLens.lua"))("VignetteRadar", addon)
 assert(loadfile("Data/PhaseLens.lua"))("VignetteRadar", addon)
 
 local board = addon.VignetteRadarWarbandBoard.New(nil, { staleAfter=60 })
@@ -54,34 +54,6 @@ local reloadedPlanner = addon.VignetteRadarResetPlanner.New(planner:Export())
 assert(reloadedPlanner:Evaluate("daily:1", { daily="D2", verifiedReset=true }).status == "Confirmed")
 assert(reloadedPlanner:Evaluate("daily:1", { daily="D3" }).status == "Unknown",
     "a guessed calendar day is not a verified reset")
-
-local lookups = 0
-local lens = addon.VignetteRadarCollectionLens.New({
-    { sourceKey="rare:1", category="mount", rewardID=10,
-        evidence="trusted-pack", name="Crimson Drake" },
-    { sourceKey="rare:1", category="mount", rewardID=10,
-        evidence="trusted-pack" },
-    { sourceKey="rare:1", category="toy", rewardID=20, evidence="manual" },
-    { sourceKey="rare:1", category="pet", rewardID=30, evidence="guessed" },
-}, function(category, rewardID)
-    lookups = lookups + 1
-    if category == "mount" then return { collected=true, evidence="api" } end
-    if category == "toy" then return { collected=false, evidence="api" } end
-end)
-assert(lens.count == 2, "duplicates and guessed source links are rejected")
-local rewards, linkage = lens:GetRewards("rare:1")
-assert(linkage == "linked" and #rewards == 2)
-assert(rewards[1].eligibility == "unknown" and rewards[1].linkEvidence)
-assert(rewards[1].status == "collected" and rewards[2].status == "uncollected")
-lens:GetRewards("rare:1")
-assert(lookups == 2, "collection API results are cached")
-local filtered, stillLinked = lens:GetRewards("rare:1", { hideCollected=true })
-assert(#filtered == 1 and stillLinked == "linked")
-lens:Invalidate("mount", 10)
-lens:GetRewards("rare:1")
-assert(lookups == 3, "collection events can invalidate one reward")
-local missingRewards, missingLinkage = lens:GetRewards("unknown")
-assert(#missingRewards == 0 and missingLinkage == "unknown")
 
 local phase = addon.VignetteRadarPhaseLens.New({ action="hide", heuristic=true })
 local pin = { key="pack:1", phaseEvidence="trusted-pack",

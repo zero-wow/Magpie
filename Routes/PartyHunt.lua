@@ -10,27 +10,13 @@ PartyHunt.PREFIX = "VRHUNT1"
 PartyHunt.TTL = 90
 PartyHunt.MAX_REPORTS = 64
 
-local function Safe(value)
-    if not issecretvalue then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and not secret
-end
+local Safe, Field = addon.Secret.Safe, addon.Secret.Field
+local Integer, SecretText = addon.Secret.Integer, addon.Secret.Text
 
-local function Field(record, key)
-    if not Safe(record) or type(record) ~= "table" then return nil end
-    local ok, value = pcall(function() return record[key] end)
-    return ok and Safe(value) and value or nil
-end
-
-local function Integer(value, lower, upper)
-    if not Safe(value) or type(value) ~= "number" or value ~= value
-        or value < lower or value > upper or value % 1 ~= 0 then return nil end
-    return value
-end
-
+-- Party messages also reject control characters and the escape pipe.
 local function Text(value, limit, pattern)
-    if not Safe(value) or type(value) ~= "string" or #value == 0 or #value > limit
-        or value:find("[%c|]") then return nil end
+    value = SecretText(value, limit)
+    if not value or value:find("[%c|]") then return nil end
     if pattern and not value:match(pattern) then return nil end
     return value
 end
@@ -47,15 +33,27 @@ local function Now()
     return 0
 end
 
+-- The transport returns the raw C_ChatInfo results: retail answers with
+-- Enum.RegisterAddonMessagePrefixResult / Enum.SendAddonMessageResult numbers
+-- (Success = 0), older clients with booleans.
 local function DefaultTransport()
     return {
         register = function(prefix)
-            return C_ChatInfo and type(C_ChatInfo.RegisterAddonMessagePrefix) == "function"
-                and C_ChatInfo.RegisterAddonMessagePrefix(prefix)
+            if not C_ChatInfo or type(C_ChatInfo.RegisterAddonMessagePrefix) ~= "function" then return false end
+            return C_ChatInfo.RegisterAddonMessagePrefix(prefix)
         end,
         send = function(prefix, payload, channel)
             if not C_ChatInfo or type(C_ChatInfo.SendAddonMessage) ~= "function" then return false end
-            return C_ChatInfo.SendAddonMessage(prefix, payload, channel) ~= false
+            return C_ChatInfo.SendAddonMessage(prefix, payload, channel)
+        end,
+        playerName = function()
+            if type(UnitFullName) ~= "function" then return nil end
+            local name, realm = UnitFullName("player")
+            if (type(realm) ~= "string" or realm == "") and type(GetNormalizedRealmName) == "function" then
+                realm = GetNormalizedRealmName()
+            end
+            if type(name) ~= "string" or type(realm) ~= "string" or realm == "" then return nil end
+            return name .. "-" .. realm
         end,
         isInParty = function()
             return type(IsInGroup) == "function" and IsInGroup() == true
@@ -71,6 +69,33 @@ local function Call(transport, method, ...)
     if type(fn) ~= "function" then return false end
     local ok, result = pcall(fn, ...)
     return ok and result == true
+end
+
+-- Raw result of a transport call, or nil when it is missing or errors.
+local function CallResult(transport, method, ...)
+    local fn = Field(transport, method)
+    if type(fn) ~= "function" then return nil end
+    local ok, result = pcall(fn, ...)
+    if not ok or not Safe(result) then return nil end
+    return result
+end
+
+local function EnumValue(group, name, fallback)
+    local values = Enum and Field(Enum, group)
+    local value = Field(values, name)
+    if type(value) == "number" then return value end
+    return fallback
+end
+
+local function SendSucceeded(result)
+    return result == true or result == EnumValue("SendAddonMessageResult", "Success", 0)
+end
+
+-- A prefix that is already registered (by a reload or another instance) is usable.
+local function RegisterSucceeded(result)
+    return result == true
+        or result == EnumValue("RegisterAddonMessagePrefixResult", "Success", 0)
+        or result == EnumValue("RegisterAddonMessagePrefixResult", "DuplicatePrefix", 1)
 end
 
 local function GroupChannel(transport)
@@ -167,10 +192,12 @@ function PartyHunt:GetReports()
 end
 
 -- requested must come from a direct user action, never a detection/update loop.
-function PartyHunt:Publish(reportType, record, requested)
+-- explicit = true is a click on a share control with its own switch (Share
+-- To Group), so the Party Hunt share settings do not apply to it.
+function PartyHunt:Publish(reportType, record, requested, explicit)
     if requested ~= true then return false, "user-action-required" end
     local setting = reportType == "sighting" and "shareSightings" or "shareStop"
-    if Field(self.settings, setting) ~= true then return false, "sharing-off" end
+    if explicit ~= true and Field(self.settings, setting) ~= true then return false, "sharing-off" end
     local channel = GroupChannel(self.transport)
     if not channel then return false, "local-only" end
     local checked = ValidRecord(record, reportType)
@@ -188,8 +215,8 @@ function PartyHunt:Publish(reportType, record, requested)
     local nonce = tostring(math.floor(now * 1000)) .. "-" .. tostring(self.sequence)
     local payload = Encode(checked, nonce)
     if not payload then return false, "invalid-report" end
-    if not Call(self.transport, "register", PartyHunt.PREFIX)
-        or not Call(self.transport, "send", PartyHunt.PREFIX, payload, channel) then
+    -- Sending needs no registered prefix; Start registers it once for receiving.
+    if not SendSucceeded(CallResult(self.transport, "send", PartyHunt.PREFIX, payload, channel)) then
         return false, "local-only"
     end
     self.outgoing[reportType] = now
@@ -200,8 +227,8 @@ end
 function PartyHunt:PublishSighting(record, requested)
     return self:Publish("sighting", record, requested)
 end
-function PartyHunt:PublishStop(record, requested)
-    return self:Publish("stop", record, requested)
+function PartyHunt:PublishStop(record, requested, explicit)
+    return self:Publish("stop", record, requested, explicit)
 end
 
 function PartyHunt:HandleMessage(prefix, payload, channel, sender)
@@ -215,6 +242,13 @@ function PartyHunt:HandleMessage(prefix, payload, channel, sender)
     else return false end
     local ignored = Field(self.settings, "ignored")
     if type(ignored) == "table" and Field(ignored, sender:lower()) == true then return false end
+    -- Group channels echo our own messages back to us.
+    local me = self.playerName
+    if not me then
+        me = Text(CallResult(self.transport, "playerName"), 100)
+        self.playerName = me
+    end
+    if me and sender:lower() == me:lower() then return false end
     local report = Decode(payload)
     if not report then return false end
     self:Prune()
@@ -262,15 +296,19 @@ function PartyHunt:Start()
     if type(InCombatLockdown) == "function" and InCombatLockdown() == true then
         return false, "combat-lockdown"
     end
-    if type(CreateFrame) ~= "function" or not Call(self.transport, "register", PartyHunt.PREFIX) then
-        return false
+    if type(CreateFrame) ~= "function" then return false end
+    if not self.registered then
+        if not RegisterSucceeded(CallResult(self.transport, "register", PartyHunt.PREFIX)) then
+            return false, "prefix-unavailable"
+        end
+        self.registered = true
     end
     local frame = CreateFrame("Frame")
     if not frame then return false end
     local owner = self
     frame:SetScript("OnEvent", function(_, event, ...)
         if not owner.active then return end
-        if event == "CHAT_MSG_ADDON" then owner:HandleMessage(...) 
+        if event == "CHAT_MSG_ADDON" then owner:HandleMessage(...)
         elseif event == "GROUP_ROSTER_UPDATE" then owner:OnGroupChanged() end
     end)
     local ok = pcall(function()

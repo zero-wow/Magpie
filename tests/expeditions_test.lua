@@ -1,5 +1,6 @@
 local path = arg[1] or "Routes/Expeditions.lua"
 local addon = {}
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile(path))("VignetteRadar", addon)
 local Expeditions = assert(addon.VignetteRadarExpeditions)
 

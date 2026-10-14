@@ -46,6 +46,7 @@ C_QuestLine = {
     end,
 }
 
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile(sourcePath))("VignetteRadar", addon)
 local Q = assert(addon.VignetteRadarQuestData)
 assert(Q.GetNextStep(0, 77) == nil and #Q.GetAvailableQuestStarts("bad") == 0,
@@ -165,4 +166,14 @@ assert(prefixedFallback and prefixedFallback.label == "Participate in the Brewfe
     and prefixedFallback.count == "0/1",
     "leading progress counts in waypoint text must also remain single")
 
+local hintReads = 0
+C_QuestLog.GetNextWaypointText = function()
+    hintReads = hintReads + 1
+    return "Take the portal"
+end
+Q.Invalidate()
+assert(Q.GetNextStepLine(501) == "Take the portal" and Q.GetNextStepLine(501) == "Take the portal"
+    and hintReads == 1, "route hints are reused for two seconds")
+now = now + 2
+assert(select(2, Q.GetNextStepLine(501)) == true and hintReads == 2, "an old route hint is read again")
 print("vignette radar quest data tests passed")

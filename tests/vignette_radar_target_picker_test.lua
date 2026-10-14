@@ -25,6 +25,7 @@ function methods:SetWordWrap(value) self.wordWrap = value end
 function methods:SetMaxLines(value) self.maxLines = value end
 function methods:SetColorTexture(...) self.color = { ... } end
 function methods:SetTexture(value) self.texture = value end
+function methods:SetTexCoord(...) self.texCoord = { ... } end
 function methods:SetVertexColor(...) self.vertexColor = { ... } end
 function methods:SetAlpha(value) self.alpha = value end
 function methods:SetScript(name, callback) self.scripts = self.scripts or {}; self.scripts[name] = callback end
@@ -52,7 +53,6 @@ end
 UIParent = CreateFrame("Frame", "UIParent")
 UIParent:SetSize(1600, 900)
 STANDARD_TEXT_FONT = "fallback.ttf"
-EllesmereUI = { EXPRESSWAY = "native-eui-font.ttf" }
 local tooltipLines = {}
 GameTooltip = {
     SetOwner = function() tooltipLines = {} end,
@@ -63,6 +63,14 @@ GameTooltip = {
 GetTime = function() return 1000 end
 
 local addon = {}
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Bus.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Focus.lua"))("VignetteRadar", addon)
+-- The real Style (default theme) supplies the bundled font helper.
+local styleHost = { GetSettings = function() return {} end }
+assert(loadfile("UI/Style.lua"))("VignetteRadar", styleHost)
+addon.VignetteRadarStyle = styleHost.VignetteRadarStyle
+assert(loadfile("UI/IconButton.lua"))("VignetteRadar", addon)
 assert(loadfile(sourcePath))("VignetteRadar", addon)
 local picker = assert(addon.VignetteRadarTargetPicker, "target picker must publish its API")
 local changes = 0
@@ -83,11 +91,12 @@ assert(picker.Toggle(anchor) and picker.IsShown(), "focus button must open the a
 local panel = assert(_G.VignetteRadarTargetPickerPanel, "target list needs a stable global frame name")
 assert(panel.width == 250 and panel.height == 258 and panel.clamped == true,
     "specific target picker must stay compact and screen-safe")
-assert(panel.face.texture == "Interface\\AddOns\\VignetteRadar\\Media\\radar-rounded-square.tga"
-    and panel.edge.texture == "Interface\\AddOns\\VignetteRadar\\Media\\radar-rounded-border.tga"
+assert(panel.face.texture == "Interface\\AddOns\\Magpie\\Media\\radar-rounded-square.tga"
+    and panel.edge.texture == "Interface\\AddOns\\Magpie\\Media\\radar-rounded-border.tga"
     and panel.rows[1].face.texture == panel.face.texture
     and panel.rows[1].selection.texture == panel.face.texture
-    and panel.clear.face.texture == "Interface\\AddOns\\VignetteRadar\\Media\\control-rounded-square.tga"
+    and panel.clear.art.texture:find("button%-icons") ~= nil
+    and panel.clear.icon == "eye" and panel.next.icon == "next" and panel.previous.icon == "back"
     and panel.backdrop == nil and panel.rows[1].backdrop == nil,
     "the focus picker must use the radar's rounded image surfaces instead of square backdrops")
 assert(panel.point[1] == "TOPLEFT" and panel.point[3] == "TOPRIGHT" and panel.point[4] == 8,
@@ -101,7 +110,7 @@ assert(panel.rows[1].registeredClicks[2] == "RightButtonUp",
 assert(panel.rows[1].name.width == 121 and panel.rows[1].meta.width == 132
     and panel.rows[1].action.width == 49 and panel.subtitle.width == 165,
     "names and metadata must be bounded away from row actions and the panel header")
-addon.VignetteRadarStyle = { Color = function(slot)
+addon.VignetteRadarStyle = { SetFont = addon.VignetteRadarStyle.SetFont, Color = function(slot)
     if slot == "accent" then return .7, .4, 1 end
     return .02, .03, .04
 end }
@@ -261,5 +270,28 @@ assert(picker.Toggle(radarField), "focus popup must still open from a tightly pl
 assert(radarField.point[1] == "CENTER" and panel.point[2] == UIParent,
     "a cramped focus popup must center itself without detaching the radar field")
 picker.Hide()
+
+do
+    -- A centered radar with no clear side is moved for the picker, then put back on close.
+    UIParent:SetSize(800, 600)
+    local radar = CreateFrame("Frame", nil, UIParent)
+    radar.left, radar.right, radar.top, radar.bottom = 213, 587, 500, 100
+    radar:SetSize(374, 400)
+    assert(picker.Toggle(radar) == true)
+    local moved = assert(radar.point, "a boxed-in radar must be moved to make room")
+    assert(moved[1] == "TOPLEFT" and moved[4] ~= 213)
+    radar.left = moved[4]
+    picker.Hide()
+    assert(radar.point and radar.point[4] == 213 and radar.point[5] == 500 - 600,
+        "closing the picker must restore the radar to where it was")
+    -- If the player dragged the radar meanwhile, closing must not yank it back.
+    radar.left = 213
+    assert(picker.Toggle(radar) == true)
+    radar.left = 50
+    radar.point = { "TOPLEFT", UIParent, "TOPLEFT", 50, -100 }
+    picker.Hide()
+    assert(radar.point[4] == 50, "a radar moved by the player must stay where it was put")
+    UIParent:SetSize(1600, 900)
+end
 
 io.write("vignette radar target picker tests passed\n")

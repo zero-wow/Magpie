@@ -36,9 +36,33 @@ addon.VignetteRadarPartyHunt = {
         }
     end,
 }
+local directorCalls = { configure = 0 }
+addon.VignetteRadarContextDirector = {
+    New = function()
+        return {
+            Configure = function() directorCalls.configure = directorCalls.configure + 1 end,
+            Update = function(_, snapshot, _, apply)
+                directorCalls.snapshot = { treasure = snapshot.treasure,
+                    questing = snapshot.questing }
+                if apply then apply({ context = "treasure" }) end
+            end,
+        }
+    end,
+}
+addon.VignetteRadarWorldFocus = {
+    GetRoutePoint = function()
+        return { key = "treasure:9", name = "Chest" }, "treasure"
+    end,
+}
+local selection
+addon.VignetteRadarIntelligence = {
+    SetContext = function() end,
+    SetSelection = function(value) selection = value end,
+}
 GetTime = function() return 10 end
 GetServerTime = function() return 1800000000 end
 UnitGUID = function() return "Player-123" end
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile("Core/FeatureRuntime.lua"))("VignetteRadar", addon)
 local runtime = addon.VignetteRadarFeatureRuntime
 assert(runtime.Initialize() and calls.surveying and calls.recording
@@ -50,6 +74,12 @@ assert(calls.samples == 1 and #calls.signals == 1
     and calls.signals[1].kind == "appeared")
 runtime.Observe(100, point, {})
 assert(#calls.signals == 2 and calls.signals[2].kind == "vanished")
+assert(directorCalls.snapshot and directorCalls.snapshot.treasure == true
+    and directorCalls.snapshot.questing == false,
+    "route point kind must reach the context director")
+assert(addon.VignetteRadarContextOverlay and addon.VignetteRadarContextOverlay.context == "treasure")
+assert(runtime.RefreshIntelligence() and selection.goalCategory == "treasure",
+    "route point kind must reach the intelligence selection")
 assert(not runtime.ShareSighting(point, false)
     and runtime.ShareSighting(point, true))
 db.vignetteRadarReplayRecording = false

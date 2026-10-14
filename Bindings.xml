@@ -20,6 +20,9 @@
     <Binding name="VIGNETTERADAR_TOGGLE_BEARING" category="ADDONS">
         VignetteRadar_ToggleBearingBar()
     </Binding>
+    <Binding name="VIGNETTERADAR_TOGGLE_CONSTELLATION" category="ADDONS">
+        VignetteRadar_ToggleConstellation()
+    </Binding>
     <Binding name="VIGNETTERADAR_TOGGLE_ROUTE" category="ADDONS">
         VignetteRadar_ToggleAutoRoute()
     </Binding>
@@ -47,4 +50,5 @@
     <Binding name="VIGNETTERADAR_CLEAR_FOCUS" category="ADDONS">
         VignetteRadar_ClearFocus()
     </Binding>
+    <Binding name="CLICK VignetteRadarQuestItemButton:LeftButton" category="ADDONS" />
 </Bindings>

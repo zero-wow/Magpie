@@ -5,11 +5,10 @@ local PANEL_W, PANEL_H = 232, 446
 local MARKER_VISIBLE_ROWS, MARKER_ROW_STEP = 8, 25
 local QUEST_PANEL_W, QUEST_VISIBLE_ROWS = 224, 8
 local QUEST_ROW_H, QUEST_ROW_STEP = 22, 26
-local QUEST_DIAMOND_TEXTURE = "Interface\\AddOns\\VignetteRadar\\Media\\quest-diamond.tga"
-local QUEST_HOLLOW_DIAMOND_TEXTURE = "Interface\\AddOns\\VignetteRadar\\Media\\quest-diamond-hollow.tga"
+local QUEST_DIAMOND_TEXTURE = "Interface\\AddOns\\Magpie\\Media\\quest-diamond.tga"
+local QUEST_HOLLOW_DIAMOND_TEXTURE = "Interface\\AddOns\\Magpie\\Media\\quest-diamond-hollow.tga"
 local QUEST_HOLLOW_SIZE = 13 * 26 / 30
 local ACCENT = { 0.05, 0.82, 0.62 }
-local FONT_FALLBACK = "Fonts\\FRIZQT__.TTF"
 local SKULL_TEXTURE = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"
 local CIRCLE_TEXTURE = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 local UNPACK = unpack or table.unpack
@@ -106,8 +105,9 @@ end
 -- visible enough to preserve spatial context without competing with the focus.
 function API.OpacityFor(category)
     category = CategoryKey(category)
-    if not API.IsCategoryEnabled(category) then return 0 end
-    local highlight = API.GetHighlight()
+    local settings = API.ApplyDefaults()
+    if settings.vignetteRadarCategories[category] ~= true then return 0 end
+    local highlight = settings.vignetteRadarHighlight
     if highlight and highlight ~= category then return 0.18 end
     return 1
 end
@@ -153,14 +153,9 @@ function API.SourceDescription(source)
     return SOURCE_DESCRIPTION[source]
 end
 
-local function FontPath()
-    return EllesmereUI and (EllesmereUI.EXPRESSWAY or EllesmereUI._font)
-        or STANDARD_TEXT_FONT or FONT_FALLBACK
-end
-
 local function Text(parent, size, value)
     local label = parent:CreateFontString(nil, "OVERLAY")
-    label:SetFont(FontPath(), size, "")
+    addon.VignetteRadarStyle.SetFont(label, size, "")
     label:SetText(value or "")
     label:SetTextColor(0.88, 0.90, 0.92, 1)
     label:SetJustifyH("LEFT")
@@ -328,7 +323,7 @@ local function CreateCategoryRow(parent, category, index)
     row.label = Text(row, 10, definition.label)
     row.label:SetPoint("LEFT", category == "rare" and 39 or 29, 0)
     row.label:SetWidth(category == "rare" and 90 or 100)
-    if category == "other" then row.label:SetFont(FontPath(), 9, "") end
+    if category == "other" then addon.VignetteRadarStyle.SetFont(row.label, 9, "") end
     if row.label.SetMaxLines then row.label:SetMaxLines(1) end
 
     row.toggle = CreateFrame("Button", nil, row, "BackdropTemplate")
@@ -439,7 +434,7 @@ local function CreateOtherGuide(parent, label, x, y, symbol)
     row.symbol = symbol
     if symbol == "quest" then
         row.rim = Circle(row, 11)
-        row.rim:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\quest-diamond.tga")
+        row.rim:SetTexture("Interface\\AddOns\\Magpie\\Media\\quest-diamond.tga")
         row.rim:SetVertexColor(.04, .04, .03, .9)
         row.halo = row:CreateTexture(nil, "BACKGROUND")
         row.halo:SetSize(16, 16)
@@ -448,7 +443,7 @@ local function CreateOtherGuide(parent, label, x, y, symbol)
         row.fill = row:CreateTexture(nil, "OVERLAY")
         row.fill:SetSize(8, 8)
         row.fill:SetPoint("CENTER", row.rim, "CENTER")
-        row.fill:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\quest-diamond.tga")
+        row.fill:SetTexture("Interface\\AddOns\\Magpie\\Media\\quest-diamond.tga")
     elseif symbol == "area" then
         row.fill = row:CreateTexture(nil, "ARTWORK")
         row.fill:SetSize(11, 11)
@@ -510,8 +505,25 @@ local function FrameValue(frame, method)
     return type(value) == "number" and value or nil
 end
 
+-- Puts back a radar panel that Attach moved to make room, unless the player
+-- has dragged it since. holder.shiftedAnchor stores the original spot.
+local function RestoreShift(holder)
+    if not (holder and holder.shiftedAnchor) then return end
+    local saved = holder.shiftedAnchor
+    holder.shiftedAnchor = nil
+    local anchor = saved.anchor
+    local currentLeft = FrameValue(anchor, "GetLeft")
+    if currentLeft and math.abs(currentLeft - saved.shiftedLeft) <= 2 then
+        anchor:ClearAllPoints()
+        anchor:SetPoint("TOPLEFT", UIParent, "TOPLEFT", saved.left,
+            (saved.top * saved.scale - saved.screenHeight) / saved.scale)
+    end
+end
+
 local function Attach(anchor)
     if not panel then return end
+    -- Beside the radar it is not free: the next free placement starts over.
+    panel._vrFree = nil
     panel:ClearAllPoints()
     local screenWidth = FrameValue(UIParent, "GetWidth")
     local screenHeight = FrameValue(UIParent, "GetHeight")
@@ -537,9 +549,13 @@ local function Attach(anchor)
         -- A centered Squat panel can leave no side or vertical space. Move the
         -- whole panel only when it is the anchor, keeping the saved position intact.
         if anchor and anchorWidth and anchorWidth >= 100 and left and top and screenWidth and screenHeight
-            and anchorWidth + PANEL_W + 24 <= screenWidth
+            and anchorWidth + PANEL_W + 24 <= screenWidth and not panel.shiftedAnchor
             and type(anchor.ClearAllPoints) == "function" and type(anchor.SetPoint) == "function" then
             local shiftedLeft = math.max(8, screenWidth - PANEL_W - 16 - anchorWidth)
+            -- Remember where the radar was so hiding this panel puts it back.
+            panel.shiftedAnchor = { anchor = anchor, left = left / anchorScale,
+                top = top / anchorScale, scale = anchorScale,
+                shiftedLeft = shiftedLeft / anchorScale, screenHeight = screenHeight }
             anchor:ClearAllPoints()
             anchor:SetPoint("TOPLEFT", UIParent, "TOPLEFT",
                 shiftedLeft / anchorScale, (top - screenHeight) / anchorScale)
@@ -837,14 +853,9 @@ local function EnsureMarkerPanel()
         row:Hide()
         markerPanel.rows[index] = row
     end
-    markerPanel.back = CreateFrame("Button", nil, markerPanel, "BackdropTemplate")
-    markerPanel.back:SetSize(65, 20)
+    markerPanel.back = addon.VignetteRadarIconButton.Create(markerPanel, "back",
+        { size = 20, label = "Back To Legend" })
     markerPanel.back:SetPoint("BOTTOMLEFT", 10, 8)
-    Surface(markerPanel.back, .03, .038, .043, .96, .16)
-    markerPanel.back.label = Text(markerPanel.back, 8, "LEGEND")
-    markerPanel.back.label:SetAllPoints()
-    markerPanel.back.label:SetJustifyH("CENTER")
-    AddPressState(markerPanel.back)
     markerPanel.back:SetScript("OnClick", function()
         markerPanel:Hide()
         if panel then API.Refresh(); panel:Show() end
@@ -873,7 +884,7 @@ local function EnsurePanel()
     Surface(panel)
     if addon.VignetteRadarControls then addon.VignetteRadarControls.PopupSurface(panel) end
 
-    panel.title = Text(panel, 11, "RADAR LEGEND")
+    panel.title = Text(panel, 11, "LEGEND")
     panel.title:SetPoint("TOPLEFT", 10, -10)
     panel.title:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3], 1)
 
@@ -883,19 +894,13 @@ local function EnsurePanel()
     panel.divider:SetHeight(1)
     panel.divider:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 0.18)
 
-    panel.all = CreateFrame("Button", nil, panel, "BackdropTemplate")
-    panel.all:SetSize(42, 18)
-    panel.all:SetPoint("TOPRIGHT", -9, -7)
-    Surface(panel.all, 0.03, 0.038, 0.043, 0.96, 0.16)
-    panel.all.label = Text(panel.all, 8, "CLEAR")
-    panel.all.label:SetAllPoints()
-    panel.all.label:SetJustifyH("CENTER")
-    AddPressState(panel.all)
-    panel.all:SetScript("OnClick", function() API.SetHighlight(nil) end)
-    panel.all:SetScript("OnEnter", function(self)
-        Tooltip(self, "Clear spotlight", "Return shown live types to equal strength. Hidden types stay hidden.")
-    end)
-    panel.all:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    -- Active (underlined) while a spotlight is on, so there is something to clear.
+    panel.all = addon.VignetteRadarIconButton.Create(panel, "refresh", { size = 20,
+        label = "Clear Spotlight",
+        tooltip = "Return shown live types to equal strength. Hidden types stay hidden.",
+        isActive = function() return API.GetHighlight() ~= nil end,
+        onClick = function() API.SetHighlight(nil) end })
+    panel.all:SetPoint("TOPRIGHT", -20, -6)
 
     panel.liveHint = Text(panel, 8, "CLICK ROW TO SPOTLIGHT")
     panel.liveHint:SetPoint("TOPLEFT", 10, -29)
@@ -916,21 +921,14 @@ local function EnsurePanel()
     panel.mapHeading = GuideLabel(panel, "MAP NOTES", 10, 168, PANEL_W - 72, 9)
     panel.mapHeading:SetHeight(12)
     panel.mapHeading:SetTextColor(.68, .75, .77, 1)
-    panel.mapToggle = CreateFrame("Button", nil, panel, "BackdropTemplate")
-    panel.mapToggle:SetSize(42, 18)
-    panel.mapToggle:SetPoint("TOPRIGHT", -9, -168)
-    Surface(panel.mapToggle, 0.03, 0.038, 0.043, 0.96, 0.16)
-    panel.mapToggle.label = Text(panel.mapToggle, 8, "OFF")
-    panel.mapToggle.label:SetAllPoints()
-    panel.mapToggle.label:SetJustifyH("CENTER")
-    AddPressState(panel.mapToggle)
-    panel.mapToggle:SetScript("OnClick", function()
-        API.SetMapNotesVisible(Settings().vignetteRadarMapNotesVisible ~= true)
-    end)
-    panel.mapToggle:SetScript("OnEnter", function(self)
-        Tooltip(self, "Map Notes", "Show or hide saved map-pack markers. Click a note type below to filter it.")
-    end)
-    panel.mapToggle:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    -- Active (underlined) while map notes show; the column header stays "SHOW".
+    panel.mapToggle = addon.VignetteRadarIconButton.Create(panel, "eye", { size = 20,
+        label = "Map Notes",
+        tooltip = "Show or hide saved map-pack markers. Click a note type below to filter it.",
+        onClick = function()
+            API.SetMapNotesVisible(Settings().vignetteRadarMapNotesVisible ~= true)
+        end })
+    panel.mapToggle:SetPoint("TOPRIGHT", -20, -167)
     panel.mapNotes = {}
     for index, definition in ipairs(MAP_NOTES) do
         panel.mapNotes[definition.kind] = CreateMapNote(panel, definition, index)
@@ -981,6 +979,56 @@ local function EnsurePanel()
     panel.status = Text(panel, 8, "SPOTLIGHT OFF · SHOWN TYPES EQUAL")
     panel.status:SetPoint("BOTTOMLEFT", 10, 7)
     panel.status:SetTextColor(0.48, 0.55, 0.56, 1)
+    -- Detach/dock: a free legend you can drag, or the radar's tray.
+    local tray = addon.VignetteRadarTray
+    if tray and tray.CreateDetachButton then
+        panel.detach = tray.CreateDetachButton(panel,
+            function() return addon.GetSettings().vignetteRadarLegendDetached == true end,
+            function() API.SetDetached(addon.GetSettings().vignetteRadarLegendDetached ~= true) end)
+        panel.detach:SetPoint("TOPLEFT", 104, -6)
+    end
+    local function IsDetached() return addon.GetSettings().vignetteRadarLegendDetached == true end
+    if tray and tray.RegisterPanel then
+        -- Detached, a position lock beside the detach icon (the shared
+        -- per-panel lock, key "legend"): locked, it does not drag.
+        panel.moveLock = tray.CreateLockButton(panel, {
+            labels = { "Position Unlocked", "Position Locked" },
+            tips = { "Drag the legend to move it. Lock to stop it moving.", "Unlock to move it again." },
+            isLocked = function() return tray.IsPanelLocked("legend") end,
+            setLocked = function(value) tray.SetPanelLocked("legend", value) end })
+        panel.moveLock:SetPoint("LEFT", panel.detach, "RIGHT", 4, 0)
+        panel.moveLock:SetShown(IsDetached())
+        -- On the shared panel system (UI/Tray.lua): docked = the radar's
+        -- tray, detached = a free panel with a saved spot, kept on screen.
+        -- Its old spot (vignetteRadarLegendPosition) moves over once.
+        tray.RegisterPanel(panel, { key = "legend", label = "the Legend", drawer = true, ownControls = true,
+            keepWidth = true, strata = "DIALOG", legacySpot = "vignetteRadarLegendPosition",
+            isDetached = IsDetached, canDrag = IsDetached,
+            redock = function() addon.GetSettings().vignetteRadarLegendDetached = false end,
+            refresh = function()
+                if panel.moveLock then panel.moveLock:SetShown(IsDetached()) end
+                if panel.detach then panel.detach:RefreshDetach() end
+                API.Reanchor()
+            end })
+    else
+        if panel.SetMovable then panel:SetMovable(true) end
+        if panel.RegisterForDrag then panel:RegisterForDrag("LeftButton") end
+        panel:SetScript("OnDragStart", function(self)
+            if IsDetached() and self.StartMoving then self:StartMoving() end
+        end)
+        panel:SetScript("OnDragStop", function(self)
+            if self.StopMovingOrSizing then self:StopMovingOrSizing() end
+            if IsDetached() then
+                local left, top = FrameValue(self, "GetLeft"), FrameValue(self, "GetTop")
+                local height = FrameValue(UIParent, "GetHeight")
+                if left and top and height then
+                    addon.GetSettings().vignetteRadarLegendPosition = { x = left, y = top - height }
+                end
+            end
+        end)
+    end
+    -- A popup legend that had to move the radar for room puts it back on close.
+    panel:SetScript("OnHide", function(self) RestoreShift(self) end)
     -- WoW creates frames shown by default. Keep the lazy panel closed until the
     -- radar's legend button explicitly opens it.
     panel:Hide()
@@ -995,18 +1043,7 @@ local function QuestColor(entry)
     return 1, .74, .27
 end
 
-local function RestoreQuestShift()
-    if not (questPanel and questPanel.shiftedAnchor) then return end
-    local saved = questPanel.shiftedAnchor
-    questPanel.shiftedAnchor = nil
-    local anchor = saved.anchor
-    local currentLeft = FrameValue(anchor, "GetLeft")
-    if currentLeft and math.abs(currentLeft - saved.shiftedLeft) <= 2 then
-        anchor:ClearAllPoints()
-        anchor:SetPoint("TOPLEFT", UIParent, "TOPLEFT", saved.left,
-            (saved.top * saved.scale - saved.screenHeight) / saved.scale)
-    end
-end
+local function RestoreQuestShift() RestoreShift(questPanel) end
 
 local function AttachQuest(anchor, owner)
     if not questPanel then return end
@@ -1068,6 +1105,8 @@ local function RefreshQuestRows()
     questOffset = math.max(0, math.min(questOffset, count - QUEST_VISIBLE_ROWS))
     local focused = addon.VignetteRadarExploration and addon.VignetteRadarExploration.GetFocusedQuest
         and addon.VignetteRadarExploration.GetFocusedQuest()
+    local settings = addon.GetSettings()
+    local exploration = addon.VignetteRadarExploration
     for index, row in ipairs(questPanel.rows) do
         local entry = questEntries[questOffset + index]
         row.entry = entry
@@ -1089,12 +1128,11 @@ local function RefreshQuestRows()
                 row.fill:Show()
                 row.number:SetTextColor(1, 1, 1, 1)
             end
-            row.number:SetText(addon.GetSettings().vignetteRadarQuestNumbers
+            row.number:SetText(settings.vignetteRadarQuestNumbers
                 and tostring(entry.colorSlot or 1) or "")
             row.halo:SetVertexColor(r, g, b, .14)
             row.name:SetText(entry.name)
-            local exploration = addon.VignetteRadarExploration
-            local progress = addon.GetSettings().vignetteRadarQuestKeyProgress
+            local progress = settings.vignetteRadarQuestKeyProgress
                 and exploration and exploration.ObjectiveProgress
                 and exploration.ObjectiveProgress(entry.questID)
             row.progress:SetText(progress and progress:match("^%d+/%d+") or "")
@@ -1178,11 +1216,10 @@ local function EnsureQuestPanel()
         row.fill:SetTexture(QUEST_DIAMOND_TEXTURE)
         row.number = Text(row, 8, "")
         row.number:SetPoint("CENTER", row.halo, "CENTER")
-        row.number:SetFont(EllesmereUI and (EllesmereUI.EXPRESSWAY or EllesmereUI._font)
-            or STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", 9, "OUTLINE")
+        addon.VignetteRadarStyle.SetFont(row.number, 9, "OUTLINE")
         row.number:SetJustifyH("CENTER")
         row.number:SetTextColor(1, 1, 1, 1)
-        row.name = Text(row, 10, "")
+        row.name = Text(row, 9, "")
         row.name:SetPoint("LEFT", 30, 0)
         row.name:SetWidth(127)
         row.progress = Text(row, 9, "")
@@ -1239,17 +1276,9 @@ local function EnsureQuestPanel()
     questPanel.status = Text(questPanel, 8, "No mapped quests inside this range")
     questPanel.status:SetPoint("BOTTOMLEFT", 12, 8)
     questPanel.status:SetTextColor(.53, .62, .63, 1)
-    questPanel.close = CreateFrame("Button", nil, questPanel)
-    questPanel.close:SetSize(20, 20)
+    questPanel.close = addon.VignetteRadarIconButton.Create(questPanel, "close",
+        { size = 20, label = "Close Quests", onClick = function() API.HideQuest() end })
     questPanel.close:SetPoint("TOPRIGHT", -5, -5)
-    for _, points in ipairs({ { -4, -4, 4, 4 }, { -4, 4, 4, -4 } }) do
-        local line = questPanel.close:CreateLine(nil, "OVERLAY")
-        line:SetThickness(1.8)
-        line:SetColorTexture(.72, .78, .79, .9)
-        line:SetStartPoint("CENTER", questPanel.close, points[1], points[2])
-        line:SetEndPoint("CENTER", questPanel.close, points[3], points[4])
-    end
-    questPanel.close:SetScript("OnClick", function() API.HideQuest() end)
     questPanel:SetScript("OnHide", RestoreQuestShift)
     if type(UISpecialFrames) == "table" then
         UISpecialFrames[#UISpecialFrames + 1] = "VignetteRadarQuestLegendPanel"
@@ -1263,6 +1292,12 @@ function API.Refresh()
     local settings = API.ApplyDefaults()
     if not panel then return end
     if addon.VignetteRadarControls then addon.VignetteRadarControls.RefreshPopupSurface(panel) end
+    -- Docked or detached, the legend keeps the radar's own background.
+    local tray = addon.VignetteRadarTray
+    if tray then
+        tray.SkinLikeRadar(panel)
+        if tray.IsAttached(panel) then tray.RefreshTheme() end
+    end
     local highlight = API.GetHighlight()
     local style = addon.VignetteRadarStyle
     local accentRed, accentGreen, accentBlue = ACCENT[1], ACCENT[2], ACCENT[3]
@@ -1317,9 +1352,7 @@ function API.Refresh()
     end
     local mapEnabled = settings.vignetteRadarMapNotesVisible == true
         and (settings.vignetteRadarPOISource ~= "none" or settings.vignetteRadarSourceFusion)
-    panel.mapToggle.label:SetText(mapEnabled and "ON" or "OFF")
-    panel.mapToggle.label:SetTextColor(mapEnabled and accentRed or .58,
-        mapEnabled and accentGreen or .60, mapEnabled and accentBlue or .62, 1)
+    panel.mapToggle:SetActive(mapEnabled)
     for _, definition in ipairs(MAP_NOTES) do
         local row = panel.mapNotes[definition.kind]
         row.rim:SetVertexColor(Color(definition.color, CATEGORIES[definition.color].color))
@@ -1400,39 +1433,134 @@ function API.Refresh()
         and ("Trail: " .. trailName) or "Trail off")
     if highlight then
         panel.status:SetText("SPOTLIGHT: " .. CATEGORIES[highlight].label)
-        panel.all.label:SetTextColor(0.62, 0.66, 0.68, 1)
     else
         panel.status:SetText("SPOTLIGHT OFF · SHOWN TYPES EQUAL")
-        panel.all.label:SetTextColor(accentRed, accentGreen, accentBlue, 1)
     end
+    panel.all:Refresh()
+end
+
+-- With the radar up, the legend opens in the radar's tray, swapping out the
+-- quest tracker; without it, the legend is a popup beside the radar.
+local legendTray
+local function DockTray()
+    local tray = addon.VignetteRadarTray
+    return tray and tray.CanDock and tray.CanDock() and tray or nil
+end
+
+local function LegendTrayOptions()
+    if legendTray then return legendTray end
+    legendTray = {
+        frame = panel,
+        label = "Legend",
+        side = function() return addon.GetSettings().vignetteRadarQuestTrackerSide or "right" end,
+        isOpen = function() return true end,
+        setInteractive = function(on) panel:EnableMouse(on) end,
+        onReplaced = function() panel:Hide() end,
+        keepOpen = function()
+            return markerPanel ~= nil and markerPanel:IsShown() and MouseIsOver(markerPanel)
+        end,
+    }
+    return legendTray
+end
+
+local function Docked()
+    local tray = addon.VignetteRadarTray
+    return panel and tray and tray.IsAttached(panel) and tray or nil
+end
+
+local function Detached() return addon.GetSettings().vignetteRadarLegendDetached == true end
+
+-- A detached legend reopens where it was dragged; false when never placed.
+-- On the shared panel system the spot is checked once a session (off screen
+-- or invalid: back to docked) and kept on screen.
+local function PlaceDetached()
+    local tray = addon.VignetteRadarTray
+    if tray and tray.IsPanel and tray.IsPanel(panel) then
+        tray.CheckPanelSpot(panel)
+        if not (Detached() and tray.GetPanelSpot(panel)) then return false end
+        tray.PlaceFreePanel(panel)
+        return true
+    end
+    local position = addon.GetSettings().vignetteRadarLegendPosition
+    if type(position) ~= "table" or type(position.x) ~= "number" or type(position.y) ~= "number" then
+        return false
+    end
+    panel:ClearAllPoints()
+    panel:SetPoint("TOPLEFT", UIParent, "TOPLEFT", position.x, position.y)
+    return true
 end
 
 function API.Toggle(anchor)
     local legend = EnsurePanel()
     if not legend then return false end
+    local tray = not Detached() and DockTray()
+    if tray then
+        if tray.IsAttached(legend) and tray.IsOpen() then
+            tray.SetOpen(false)
+            return false
+        end
+        if markerPanel then markerPanel:Hide() end
+        API.Refresh()
+        return tray.Show(LegendTrayOptions())
+    end
     if legend:IsShown() or markerPanel and markerPanel:IsShown() then
         legend:Hide()
         if markerPanel then markerPanel:Hide() end
         return false
     end
-    Attach(anchor or attachedTo)
+    if not (Detached() and PlaceDetached()) then Attach(anchor or attachedTo) end
     API.Refresh()
     legend:Show()
     return true
 end
 
+-- Detach: leave the tray at the legend's current spot as a free panel.
+-- Dock: back into the radar's tray.
+function API.SetDetached(value)
+    local settings = addon.GetSettings()
+    local legend = EnsurePanel()
+    settings.vignetteRadarLegendDetached = value == true
+    if not legend then return end
+    if value then
+        local scale = (FrameValue(legend, "GetEffectiveScale") or 1) / (FrameValue(UIParent, "GetEffectiveScale") or 1)
+        local left, top = FrameValue(legend, "GetLeft"), FrameValue(legend, "GetTop")
+        local height = FrameValue(UIParent, "GetHeight")
+        local shared = addon.VignetteRadarTray
+        -- Saved while it still stands in the tray, so it stays on the spot.
+        local saved = shared and shared.IsPanel and shared.IsPanel(legend) and shared.SavePanelSpot(legend)
+        local tray = Docked()
+        if tray then tray.Detach(legend) end
+        if not saved and left and top and height then
+            settings.vignetteRadarLegendPosition = { x = left * scale, y = top * scale - height }
+        end
+        if not PlaceDetached() then Attach(attachedTo) end
+        API.Refresh()
+        legend:Show()
+    else
+        legend:Hide()
+        API.Toggle(attachedTo)
+    end
+    if legend.detach then legend.detach:RefreshDetach() end
+    if legend.moveLock then legend.moveLock:SetShown(value == true) end
+end
+
 function API.Reanchor(anchor)
+    if Docked() or Detached() and panel and PlaceDetached() then return true end
     if not (panel and (panel:IsShown() or markerPanel and markerPanel:IsShown())) then return false end
     Attach(anchor or attachedTo)
     return true
 end
 
 function API.Hide()
-    if panel then panel:Hide() end
     if markerPanel then markerPanel:Hide() end
+    local tray = Docked()
+    if tray then tray.Retract(); return end
+    if panel then panel:Hide() end
 end
 
 function API.IsShown()
+    local tray = Docked()
+    if tray then return tray.IsOpen() or markerPanel ~= nil and markerPanel:IsShown() end
     return panel ~= nil and panel:IsShown() or markerPanel ~= nil and markerPanel:IsShown() or false
 end
 

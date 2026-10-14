@@ -18,6 +18,9 @@ local addon = {
     end },
     VignetteRadarQuestColors = { { .3, .7, 1 } },
 }
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Points.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Compass.lua"))("VignetteRadar", addon)
 assert(loadfile(source))("VignetteRadar", addon)
 local beacons = addon.VignetteRadarBeacons
 
@@ -108,5 +111,66 @@ assert(#beacons.BuildCandidates(1, player, { farRare }, { quest }, {}, nil, sett
     "the range filter must exclude distant rares")
 assert(#beacons.BuildCandidates(1, player, { rare }, {}, {}, function() return false end, settings) == 0,
     "ignored or filtered live rares must stay hidden")
+
+-- Cards: long names wrap (two lines, else a wider card), never "...", and
+-- no two cards overlap, whatever the bearings.
+do
+    local mock = dofile("tests/ui_mock.lua").Install()
+    local real = {}
+    assert(loadfile("UI/Style.lua"))("VignetteRadar", real)
+    local style = addon.VignetteRadarStyle
+    style.SetFont = function(fontString, size) fontString.vrFontSize = math.max(9, size); return true end
+    style.TextWidth = function(fontString) return fontString:GetUnboundedStringWidth() end
+    style.TextHeight, style.LineWidths = real.VignetteRadarStyle.TextHeight, real.VignetteRadarStyle.LineWidths
+    _G.GetPlayerFacing = function() return 0 end
+    settings.vignetteRadarBeaconsEnabled, settings.vignetteRadarBeaconTreasures = true, true
+    settings.vignetteRadarBeaconMax, settings.vignetteRadarBeaconRange = 24, 1200
+    addon.VignetteRadarWorldFocus = nil
+    local here = { worldX = 0, worldY = 0, instanceID = 8 }
+    local names = { "Gorgonzormu the Unbelievably Ancient Stone Watcher of the Deep Hollow",
+        "Short", "Another Long Named Rare Elite Beast", "Ironjaw Matriarch", "Glimmering Hoard of the Tidesage",
+        "Skittering Mother Of Many Legs", "Lost Supply Cache", "Cave" }
+    local live = {}
+    for index, name in ipairs(names) do
+        live[index] = { key = "card" .. index, name = name, category = index % 2 == 0 and "treasure" or "rare",
+            mapX = .5, mapY = .5, worldX = 100, worldY = (index - 4.5) * 30, instanceID = 8 }
+    end
+    addon.VignetteRadarPoints.Publish({ mapID = 1, player = here, targets = live })
+    beacons.Sync(1, here, live, {}, {}, nil)
+    local rail = assert(_G.VignetteRadarBeaconRail)
+    local shown = {}
+    for _, object in ipairs(mock.created) do
+        if object.parent == rail and object.kind == "Button" and object.shown then shown[#shown + 1] = object end
+    end
+    assert(#shown >= 4, "close bearings stack into rows: " .. #shown)
+    local function Box(card)
+        local x, y = card.point[4], card.point[5]
+        return x - card.width / 2, x + card.width / 2, -y, -y + card.height
+    end
+    for i = 1, #shown do
+        local card = shown[i]
+        local label = card.label
+        assert(label.wordWrap == true, "card names wrap instead of being cut")
+        assert(label.width >= 83, "a card name keeps at least the base width")
+        local left, right, top, bottom = Box(card)
+        assert(bottom <= rail.height - 4, "the bar grows so every card stays inside it")
+        for j = i + 1, #shown do
+            local l2, r2, t2, b2 = Box(shown[j])
+            assert(right + 3 <= l2 or r2 + 3 <= left or bottom <= t2 or b2 <= top,
+                "cards must never overlap: " .. tostring(card.label.text) .. " / " .. tostring(shown[j].label.text))
+        end
+    end
+    local wide
+    for _, card in ipairs(shown) do
+        if card.label.text == "Another Long Named Rare Elite Beast" then wide = card end
+    end
+    assert(wide and wide.label.width > 83 and wide.height > 25,
+        "a name too long for two base lines gets a wider, taller card")
+    -- Turning moves every card by the same amount: rows keep their spacing.
+    local before = shown[1].point[4]
+    _G.GetPlayerFacing = function() return .1 end
+    beacons.Place()
+    assert(shown[1].point[4] ~= before, "cards slide with the camera every frame")
+end
 
 print("beacon candidate tests passed")

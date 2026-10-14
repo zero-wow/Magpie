@@ -31,6 +31,7 @@ addon.VignetteRadarQuestData = {
 }
 local wantsPool = false
 addon.VignetteRadarWorldFocus = { WantsQuestPool = function() return wantsPool end }
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile("Data/RouteQuests.lua"))("VignetteRadar", addon)
 local pool = addon.VignetteRadarRouteQuests
 local settings = { vignetteRadarAutoRouteNearbyZones = true,
@@ -75,6 +76,7 @@ assert(foundObjective and foundObjective.mapID == 124
     "the pool should expose mapped objectives and available quest starts")
 pool.Tick()
 assert(scans == 2, "repeated radar refreshes must reuse the map cache")
+assert(pool.Candidates() == pool.Candidates(), "unchanged pool data must reuse the candidate list")
 now = now + 5
 pool.Tick()
 assert(scans == 4, "the next scheduled pass should read only two more maps")

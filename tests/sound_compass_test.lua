@@ -1,4 +1,5 @@
 local addon = {}
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile(arg[1] or "Routes/SoundCompass.lua"))("VignetteRadar", addon)
 local S = addon.VignetteRadarSoundCompass
 local c, emitted = S.New({ enabled = true, mode = "tone", cooldown = 5 }), {}
@@ -32,4 +33,12 @@ dest.relativeDegrees = 180
 textState, cue = c:Update(dest, 80, function() return false end)
 assert(textState.direction == "behind" and cue.mode == "text" and cue.unavailable,
     "failed speech must degrade to text")
+c:Configure({ enabled = true, mode = "tone", quietCombat = false, quietInstance = false })
+assert(c.settings.quietCombat == false and c.settings.quietInstance == false,
+    "explicit false quiet settings must survive Field")
+dest.inCombat, dest.inInstance = true, true
+dest.relativeDegrees = -90
+textState, cue = c:Update(dest, 200, emit)
+assert(textState.direction == "left" and cue and cue.kind == "left",
+    "quietCombat=false must still cue in combat")
 print("sound_compass_test: ok")

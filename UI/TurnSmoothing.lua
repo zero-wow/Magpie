@@ -9,10 +9,16 @@ addon.VignetteRadarTurn = Turn
 local TWO_PI = math.pi * 2
 local BLEND_SECONDS, MAX_BLEND_PIXELS = .10, 48
 
-local function Number(value)
-    if type(issecretvalue) == "function" and issecretvalue(value) then return nil end
-    return type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge and value or nil
+local Number = addon.Secret.Number
+local EMPTY = {}
+-- Per-update rotation results keyed by each region's baseline facing. The
+-- tables are reused and cleared at the start of every update (no garbage).
+local rotationSine, rotationCosine, rotationDelta = {}, {}, {}
+
+local function ClearRotations()
+    for baseline in pairs(rotationDelta) do
+        rotationSine[baseline], rotationCosine[baseline], rotationDelta[baseline] = nil, nil, nil
+    end
 end
 
 local function Normalize(angle)
@@ -96,12 +102,12 @@ function Turn.TrackLine(line, x1, y1, x2, y2, facing)
     line._turnDisplayX2, line._turnDisplayY2, line._turnDisplayFacing = x2, y2, facing
 end
 
-local function Rotation(facing, baseline, cache)
-    local saved = cache[baseline]
-    if saved then return saved[1], saved[2], saved[3] end
+local function Rotation(facing, baseline)
+    local saved = rotationDelta[baseline]
+    if saved then return rotationSine[baseline], rotationCosine[baseline], saved end
     local delta = Normalize(facing - baseline)
     local sine, cosine = math.sin(delta), math.cos(delta)
-    cache[baseline] = { sine, cosine, delta }
+    rotationSine[baseline], rotationCosine[baseline], rotationDelta[baseline] = sine, cosine, delta
     return sine, cosine, delta
 end
 
@@ -116,10 +122,10 @@ local function Blend(region, elapsed)
     return nextRemaining > 0
 end
 
-local function MovePoint(region, center, facing, elapsed, cache)
+local function MovePoint(region, center, facing, elapsed)
     if not (region and Number(region._turnFacing)
         and (not region.IsShown or region:IsShown())) then return false end
-    local sine, cosine, delta = Rotation(facing, region._turnFacing, cache)
+    local sine, cosine, delta = Rotation(facing, region._turnFacing)
     local hadOffset = (region._turnOffsetLeft or 0) > 0
     local pending = Blend(region, elapsed)
     region._turnCenter = center
@@ -135,10 +141,10 @@ local function MovePoint(region, center, facing, elapsed, cache)
     return pending
 end
 
-local function MoveLine(line, center, facing, elapsed, cache)
+local function MoveLine(line, center, facing, elapsed)
     if not (line and Number(line._turnFacing)
         and (not line.IsShown or line:IsShown())) then return false end
-    local sine, cosine, delta = Rotation(facing, line._turnFacing, cache)
+    local sine, cosine, delta = Rotation(facing, line._turnFacing)
     local pending = false
     local remaining = line._turnOffsetLeft or 0
     line._turnCenter = center
@@ -162,20 +168,20 @@ local function MoveLine(line, center, facing, elapsed, cache)
     return pending
 end
 
-local function MovePoints(collection, center, facing, elapsed, cache)
+local function MovePoints(collection, center, facing, elapsed)
     if type(collection) ~= "table" then return false end
     local pending = false
     for _, region in ipairs(collection) do
-        if MovePoint(region, center, facing, elapsed, cache) then pending = true end
+        if MovePoint(region, center, facing, elapsed) then pending = true end
     end
     return pending
 end
 
-local function MoveLines(collection, center, facing, elapsed, cache)
+local function MoveLines(collection, center, facing, elapsed)
     if type(collection) ~= "table" then return false end
     local pending = false
     for _, line in pairs(collection) do
-        if MoveLine(line, center, facing, elapsed, cache) then pending = true end
+        if MoveLine(line, center, facing, elapsed) then pending = true end
     end
     return pending
 end
@@ -188,24 +194,29 @@ function Turn.UpdateRadar(panel, facing, elapsed)
         return false
     end
     panel._turnFacing = facing
-    local cache, pending = {}, false
-    if MovePoints(panel.blips, center, facing, elapsed, cache) then pending = true end
-    if MovePoints(panel.questDots, center, facing, elapsed, cache) then pending = true end
+    ClearRotations()
+    local pending = false
+    if MovePoints(panel.blips, center, facing, elapsed) then pending = true end
+    if MovePoints(panel.questDots, center, facing, elapsed) then pending = true end
     if panel.questDots then
         for _, dot in ipairs(panel.questDots) do
-            if MovePoint(dot.halo, center, facing, elapsed, cache) then pending = true end
+            if MovePoint(dot.halo, center, facing, elapsed) then pending = true end
         end
     end
-    if MovePoints(panel.mapNotes, center, facing, elapsed, cache) then pending = true end
-    if MovePoints(panel.questStartDots, center, facing, elapsed, cache) then pending = true end
-    if MovePoints(panel.edgeCues, center, facing, elapsed, cache) then pending = true end
-    if MovePoints(panel.exploreDots, center, facing, elapsed, cache) then pending = true end
-    if MovePoints(panel.trailDots, center, facing, elapsed, cache) then pending = true end
-    if MovePoints(panel.cardinals, center, facing, elapsed, cache) then pending = true end
-    if MovePoint(panel.activeCue, center, facing, elapsed, cache) then pending = true end
-    if MoveLines(panel.exploreLines, center, facing, elapsed, cache) then pending = true end
-    if MoveLines(panel.trailMarks, center, facing, elapsed, cache) then pending = true end
-    if MoveLines(panel.trailExtraMarks, center, facing, elapsed, cache) then pending = true end
+    if MovePoints(panel.mapNotes, center, facing, elapsed) then pending = true end
+    if MovePoints(panel.questStartDots, center, facing, elapsed) then pending = true end
+    if MovePoints(panel.edgeCues, center, facing, elapsed) then pending = true end
+    if MovePoints(panel.exploreDots, center, facing, elapsed) then pending = true end
+    if MovePoints(panel.trailDots, center, facing, elapsed) then pending = true end
+    if MovePoints(panel.cardinals, center, facing, elapsed) then pending = true end
+    if MovePoint(panel.activeCue, center, facing, elapsed) then pending = true end
+    if MoveLines(panel.exploreLines, center, facing, elapsed) then pending = true end
+    if MoveLines(panel.trailMarks, center, facing, elapsed) then pending = true end
+    if MoveLines(panel.trailExtraMarks, center, facing, elapsed) then pending = true end
+    if MovePoints(panel.leadDots, center, facing, elapsed) then pending = true end
+    if MoveLines(panel.leadMarks, center, facing, elapsed) then pending = true end
+    if MoveLines(panel.leadExtraMarks, center, facing, elapsed) then pending = true end
+    if MovePoints(panel.heatDots, center, facing, elapsed) then pending = true end
     center._turnPending = pending
     return true
 end
@@ -218,16 +229,17 @@ function Turn.UpdateLauncher(launcher, facing, elapsed)
         return false
     end
     launcher._turnFacing = facing
-    center._turnPending = MovePoints(launcher.miniBlips, center, facing, elapsed, {})
+    ClearRotations()
+    center._turnPending = MovePoints(launcher.miniBlips, center, facing, elapsed)
     return true
 end
 
 function Turn.Interval(owner, throttled)
     if throttled then return .10 end
     if not owner then return .033 end
-    local count = #(owner.blips or owner.miniBlips or {})
-        + #(owner.questDots or {}) + #(owner.mapNotes or {})
-        + #(owner.trailDots or {}) + #(owner.trailMarks or {})
-        + #(owner.trailExtraMarks or {})
+    local count = #(owner.blips or owner.miniBlips or EMPTY)
+        + #(owner.questDots or EMPTY) + #(owner.mapNotes or EMPTY)
+        + #(owner.trailDots or EMPTY) + #(owner.trailMarks or EMPTY)
+        + #(owner.trailExtraMarks or EMPTY)
     return count > 160 and .067 or count > 80 and .05 or .033
 end

@@ -11,22 +11,7 @@ local DEFAULT_RANGE = 1200
 local MIN_DISTANCE_SQUARED = 8 * 8
 local ALLOWED_KINDS = { quest = true, treasure = true, pin = true }
 
-local function Safe(value)
-    if not issecretvalue then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and not secret
-end
-
-local function Field(record, key)
-    if type(record) ~= "table" or not Safe(record) then return nil end
-    local ok, value = pcall(function() return record[key] end)
-    return ok and Safe(value) and value or nil
-end
-
-local function Number(value)
-    return Safe(value) and type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge and value or nil
-end
+local Safe, Field, Number = addon.Secret.Safe, addon.Secret.Field, addon.Secret.Number
 
 local function Identity(value)
     if not Safe(value) then return nil end
@@ -38,7 +23,8 @@ end
 local function Candidate(item, player, rangeSquared)
     if Field(item, "stale") == true or Field(item, "cleared") == true
         or Field(item, "hidden") == true then return nil end
-    local kind = Field(item, "kind") or Field(item, "category") or Field(item, "type")
+    local points = addon.VignetteRadarPoints
+    local kind = points.Kind(item)
     if not ALLOWED_KINDS[kind] then return nil end
     local mapID = Number(Field(item, "mapID"))
     local x, y = Number(Field(item, "worldX")), Number(Field(item, "worldY"))
@@ -49,12 +35,7 @@ local function Candidate(item, player, rangeSquared)
     local distanceSquared = dx * dx + dy * dy
     if distanceSquared < MIN_DISTANCE_SQUARED or distanceSquared > rangeSquared then return nil end
 
-    local id
-    if kind == "quest" then id = Identity(Field(item, "questID")) or Identity(Field(item, "key"))
-    elseif kind == "pin" then id = Identity(Field(item, "id")) or Identity(Field(item, "key"))
-    else id = Identity(Field(item, "key")) or Identity(Field(item, "id")) end
-    id = id or (string.format("%.3f:%.3f", x, y))
-    local uniqueKey = kind .. ":" .. id
+    local uniqueKey = points.Key(item)
     local name = Field(item, "name")
     if type(name) ~= "string" or name == "" then name = kind == "quest" and "Quest location"
         or kind == "treasure" and "Treasure" or "My pin" end

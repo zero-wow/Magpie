@@ -31,6 +31,11 @@ function methods:SetTextColor(...) self.textColor = { ... } end
 function methods:Show() self.shown = true end
 function methods:Hide() self.shown = false end
 function methods:IsShown() return self.shown end
+function methods:HookScript(name, fn)
+    self.hooks = self.hooks or {}
+    self.hooks[name] = self.hooks[name] or {}
+    table.insert(self.hooks[name], fn)
+end
 
 function CreateFrame(kind, name, parent)
     local frame = setmetatable({ kind = kind, name = name, parent = parent }, { __index = methods })
@@ -39,6 +44,7 @@ function CreateFrame(kind, name, parent)
 end
 
 local addon = {}
+assert(loadfile("UI/Style.lua"))("VignetteRadar", addon)
 assert(loadfile(sourcePath))("VignetteRadar", addon)
 local atlas = assert(addon.VignetteRadarAtlas)
 local ok, reason = atlas.Open()
@@ -86,5 +92,15 @@ atlas.Close()
 assert(not atlas.IsOpen(), "Close must clear open state")
 for _, object in ipairs(objects) do
     if object.kind == "Button" then assert(not object.shown, "Close must hide every marker") end
+end
+
+assert(atlas.Open() == true and atlas.IsOpen())
+local onHide = WorldMapFrame.hooks and WorldMapFrame.hooks.OnHide
+assert(onHide and #onHide == 1, "the overlay must hook the world map's OnHide exactly once")
+WorldMapFrame:Hide()
+for _, hook in ipairs(onHide) do hook(WorldMapFrame) end
+assert(not atlas.IsOpen(), "hiding the world map must close the Atlas overlay")
+for _, object in ipairs(objects) do
+    if object.kind == "Button" then assert(not object.shown, "map hide must hide every marker") end
 end
 print("Atlas overlay tests passed")

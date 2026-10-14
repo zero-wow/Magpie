@@ -12,6 +12,12 @@ local EVENTS = { "ZGV_STEP_CHANGED", "ZGV_STEP_WAYPOINT_CHANGED",
 
 local function Settings() return addon.GetSettings() end
 
+-- /vrtrace (Core/Trace.lua): follow decisions are logged under "zygor".
+local TraceLib = addon.Trace
+local function Trace(fmt, ...)
+    if TraceLib then TraceLib.Log("zygor", fmt, ...) end
+end
+
 local function Clean(value)
     if type(value) ~= "string" then return nil end
     value = value:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
@@ -43,6 +49,7 @@ end
 
 function API.PauseForManual(reason)
     if Settings().vignetteRadarFollowZygor ~= true then return end
+    Trace("PauseForManual: %s (was paused=%s)", reason or "Manual waypoint selected", paused)
     paused, pauseReason = true, reason or "Manual waypoint selected"
     lastKey = nil
 end
@@ -84,6 +91,7 @@ function API.RefreshFollow(force)
     local note, reason = CurrentNote()
     if not note then
         lastReason = reason or "Current step has no mapped location"
+        Trace("RefreshFollow force=%s: no note (%s)", force, lastReason)
         return false, lastReason
     end
     if lastKey == note.key and focus.OwnsGuideWaypoint() then
@@ -92,12 +100,17 @@ function API.RefreshFollow(force)
     end
     if not force and ((lastKey and not focus.OwnsGuideWaypoint())
         or (not lastKey and ExternalWaypoint() and not focus.OwnsGuideWaypoint())) then
+        Trace("RefreshFollow: another waypoint is active (lastKey=%s); pausing", lastKey)
         API.PauseForManual("Another waypoint is active")
         return false, pauseReason
     end
+    -- SelectNote replaces any running Auto Route with the guide step.
+    Trace("RefreshFollow force=%s: pinning %s (route active=%s)", force, note.key,
+        focus.IsRouteActive and focus.IsRouteActive())
     local ok, pinReason = focus.SelectNote(note, true)
     if not ok then
         lastReason = pinReason or "Waypoint could not be set"
+        Trace("RefreshFollow: pin failed (%s)", lastReason)
         return false, lastReason
     end
     lastKey, lastReason = note.key, nil
@@ -111,6 +124,9 @@ local function QueuedRefresh()
 end
 
 local function OnGuideMessage()
+    -- The Guide Panel's step block shows the goal text; it rebuilds a frame
+    -- later (Guidance listens coalesced), whether or not Follow is on.
+    if addon.Bus then addon.Bus.Emit("ZYGOR_STEP") end
     if not API.IsFollowing() or queued then return end
     queued = true
     if C_Timer and type(C_Timer.After) == "function" then
@@ -128,20 +144,35 @@ function API.Bind(mapToWorld, mapVector, mapID, refresh)
     if boundViewer and handler and type(boundViewer.RemoveMessageHandler) == "function" then
         for _, event in ipairs(EVENTS) do pcall(boundViewer.RemoveMessageHandler, boundViewer, event, handler) end
     end
-    handler = function() OnGuideMessage() end
-    for _, event in ipairs(EVENTS) do
-        local ok = pcall(viewer.AddMessageHandler, viewer, event, handler)
-        if not ok then return false end
+    boundViewer = nil
+    local nextHandler = function() OnGuideMessage() end
+    for index, event in ipairs(EVENTS) do
+        local ok = pcall(viewer.AddMessageHandler, viewer, event, nextHandler)
+        if not ok then
+            -- Roll back the handlers already added so none fire half-bound.
+            if type(viewer.RemoveMessageHandler) == "function" then
+                for undo = 1, index - 1 do
+                    pcall(viewer.RemoveMessageHandler, viewer, EVENTS[undo], nextHandler)
+                end
+            end
+            handler = nil
+            return false
+        end
     end
+    handler = nextHandler
     boundViewer = viewer
     if API.IsFollowing() then OnGuideMessage() end
     return true
 end
 
 function API.SetFollow(enabled)
+    Trace("SetFollow %s (was %s)", enabled == true, Settings().vignetteRadarFollowZygor)
     Settings().vignetteRadarFollowZygor = enabled == true
     paused, pauseReason, lastReason, lastKey = false, nil, nil, nil
     if not enabled then return true end
+    -- Choosing Zygor replaces Auto Route; the choice sticks until changed.
+    local focus = addon.VignetteRadarWorldFocus
+    if focus and focus.StopRoute then focus.StopRoute() end
     local ok, reason = API.RefreshFollow(true)
     if not ok and type(addon.ShowVignetteRadarRouteNote) == "function" then
         addon.ShowVignetteRadarRouteNote("ZYGOR FOLLOW", "Waiting · " .. (reason or "guide step"))
@@ -164,6 +195,8 @@ function API.ToggleFollow()
         return true
     end
     paused, pauseReason, lastKey = false, nil, nil
+    local focus = addon.VignetteRadarWorldFocus
+    if focus and focus.StopRoute then focus.StopRoute() end
     return API.RefreshFollow(true)
 end
 
@@ -174,34 +207,61 @@ function API.SetMode(mode)
     return true
 end
 
+-- One goal's shown state: visible, its text (Zygor's own wording) and done.
+local function GoalState(goal)
+    local visible = true
+    if type(goal.IsVisible) == "function" then
+        local ok, result = pcall(goal.IsVisible, goal)
+        visible = ok and result ~= false and not (issecretvalue and issecretvalue(result))
+    end
+    if not visible then return false end
+    local text = Clean(goal.text or goal.title)
+    if type(goal.GetText) == "function" then
+        local ok, result = pcall(goal.GetText, goal, false, true, false, true)
+        if ok then text = Clean(result) or text end
+    end
+    local complete = goal.status == "complete"
+    if type(goal.IsComplete) == "function" then
+        local ok, result = pcall(goal.IsComplete, goal)
+        if ok and type(result) == "boolean" then complete = result end
+    end
+    return true, text, complete
+end
+
+-- The current step's goal text for the Guide Panel's step block: the goal
+-- Zygor's arrow points at, else the first one not done, else the first.
+function API.StepText()
+    local step = CurrentStep()
+    if not step then return nil end
+    local goals = type(step.goals) == "table" and step.goals or {}
+    local selected = tonumber(step.current_waypoint_goal_num)
+    local open, first
+    for index = 1, math.min(#goals, 64) do
+        local goal = goals[index]
+        local visible, text, complete = false, nil, false
+        if goal then visible, text, complete = GoalState(goal) end
+        if visible and text then
+            if index == selected then return text end
+            first = first or text
+            if not complete then open = open or text end
+        end
+    end
+    return open or first
+end
+
 function API.Goals()
     local step, _, reason = CurrentStep()
     if not step then return {}, reason end
     local goals, rows = type(step.goals) == "table" and step.goals or {}, {}
     for index = 1, math.min(#goals, 64) do
         local goal = goals[index]
-        if goal then
-            local visible = true
-            if type(goal.IsVisible) == "function" then
-                local ok, result = pcall(goal.IsVisible, goal)
-                visible = ok and result ~= false and not (issecretvalue and issecretvalue(result))
-            end
-            if visible then
-                local text = Clean(goal.text or goal.title)
-                if type(goal.GetText) == "function" then
-                    local ok, result = pcall(goal.GetText, goal, false, true, false, true)
-                    if ok then text = Clean(result) or text end
-                end
-                local complete = goal.status == "complete"
-                if type(goal.IsComplete) == "function" then
-                    local ok, result = pcall(goal.IsComplete, goal)
-                    if ok and type(result) == "boolean" then complete = result end
-                end
-                local note, missing = CurrentNote("objective", index)
-                rows[#rows + 1] = { index = index, name = text or ("Objective " .. index),
-                    complete = complete, mapped = note ~= nil,
-                    reason = missing, selected = step.current_waypoint_goal_num == index }
-            end
+        local visible, text, complete = false, nil, false
+        if goal then visible, text, complete = GoalState(goal) end
+        if visible then
+            local note, missing = CurrentNote("objective", index)
+            rows[#rows + 1] = { index = index, name = text or ("Objective " .. index),
+                complete = complete, mapped = note ~= nil,
+                reason = missing, selected = step.current_waypoint_goal_num == index }
         end
     end
     return rows

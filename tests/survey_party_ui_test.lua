@@ -41,6 +41,9 @@ local function Node(kind)
         SetScript = function(self, name, callback) self.scripts[name] = callback end,
         CreateFontString = function() return Node("FontString") end,
         CreateTexture = function() return Node("Texture") end,
+        SetTexture = function(self, value) self.texture = value end,
+        SetTexCoord = function(self, ...) self.texCoord = { ... } end,
+        SetVertexColor = function(self, ...) self.vertexColor = { ... } end,
         LockHighlight = function(self) self.selected = true end,
         UnlockHighlight = function(self) self.selected = false end,
     } })
@@ -58,9 +61,11 @@ end
 C_Map = { GetBestMapForUnit = function() return 100 end }
 GetServerTime = function() return 5000 end
 
+local fontStyle = {}
+assert(loadfile("UI/Style.lua"))("VignetteRadar", fontStyle)
 local addon = {
     GetSettings = function() return settings end,
-    VignetteRadarStyle = { Color = function() return .5, .4, 1 end },
+    VignetteRadarStyle = { SetFont = fontStyle.VignetteRadarStyle.SetFont, Color = function() return .5, .4, 1 end },
     VignetteRadarControls = {
         Button = function(_, title, width, height)
             local button = Node("Button")
@@ -146,6 +151,7 @@ local addon = {
         Open = function() return true end,
     },
 }
+assert(loadfile("UI/IconButton.lua"))("VignetteRadar", addon)
 assert(loadfile("UI/SurveyParty.lua"))("VignetteRadar", addon)
 local api = addon.VignetteRadarSurveyParty
 assert(api.Open() and api.IsOpen())

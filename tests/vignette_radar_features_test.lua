@@ -3,6 +3,7 @@ local featuresPath = arg[2] or "Core/Features.lua"
 
 VignetteRadarDB, WaffleHouseDB = nil, nil
 local addon = {}
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile(corePath))("VignetteRadar", addon)
 assert(loadfile(featuresPath))("VignetteRadar", addon)
 local F, db = addon.VignetteRadarFeatures, addon.GetSettings()

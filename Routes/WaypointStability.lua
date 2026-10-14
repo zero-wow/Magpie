@@ -8,13 +8,14 @@ addon.VignetteRadarWaypointStability = API
 
 local active, hooked, proxy, currentX, currentY, navFrame = false, false
 local restoring = false
-local elapsedTime = 0
+-- Both WaypointUI frames run Update; it works once per drawn frame.
+-- Motion under JITTER pixels is held back; anything larger is followed at
+-- once, so the pin never trails the target (Skyriding surges).
+local lastFrame, JITTER = nil, 1.5
+-- The proxy offset last applied; the proxy is re-anchored only when it moves.
+local placedX, placedY
 
-local function Number(value)
-    if type(issecretvalue) == "function" and issecretvalue(value) then return nil end
-    return type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge and value or nil
-end
+local Number = addon.Secret.Number
 
 local function CanAnchor(frame)
     if not frame then return false end
@@ -69,7 +70,7 @@ local function Restore()
         or (pinpoint and Relative(pinpoint) == proxy) or false
 end
 
-local function Update(_, elapsed)
+local function Update()
     if not active then
         if restoring then Restore() end
         return
@@ -80,10 +81,9 @@ local function Update(_, elapsed)
         API.Disable()
         return
     end
-    elapsedTime = elapsedTime + (Number(elapsed) or 0)
-    if elapsedTime < .033 then return end
-    local delta = math.min(elapsedTime, .15)
-    elapsedTime = 0
+    local now = type(GetTime) == "function" and GetTime() or nil
+    if now and now == lastFrame then return end
+    lastFrame = now
     local nav
     if C_Navigation and type(C_Navigation.GetFrame) == "function" then
         local ok, value = pcall(C_Navigation.GetFrame)
@@ -95,19 +95,15 @@ local function Update(_, elapsed)
     if not (read and centerRead and Number(x) and Number(y)
         and Number(centerX) and Number(centerY)) then return end
     if nav ~= navFrame then currentX, currentY, navFrame = x, y, nav end
-    if not currentX then currentX, currentY = x, y end
-    local distance
-    if C_Navigation and type(C_Navigation.GetDistance) == "function" then
-        local ok, value = pcall(C_Navigation.GetDistance)
-        if ok then distance = value end
+    if not currentX or math.abs(x - currentX) + math.abs(y - currentY) > JITTER then
+        currentX, currentY = x, y
     end
-    local duration = Number(distance) and distance > 150 and .20 or .10
-    local factor = math.min(1, delta / duration)
-    currentX = currentX + (x - currentX) * factor
-    currentY = currentY + (y - currentY) * factor
-    proxy:ClearAllPoints()
-    proxy:SetPoint("CENTER", WorldFrame, "CENTER",
-        currentX - centerX, currentY - centerY)
+    local offsetX, offsetY = currentX - centerX, currentY - centerY
+    if offsetX ~= placedX or offsetY ~= placedY then
+        placedX, placedY = offsetX, offsetY
+        proxy:ClearAllPoints()
+        proxy:SetPoint("CENTER", WorldFrame, "CENTER", offsetX, offsetY)
+    end
     Anchor(_G.WUIWaypointFrame, nav, "CENTER", "CENTER", 0)
     Anchor(_G.WUIPinpointFrame, nav, "BOTTOM", "TOP", 75)
 end
@@ -128,7 +124,8 @@ function API.Enable()
         _G.WUIPinpointFrame:HookScript("OnUpdate", Update)
         hooked = true
     end
-    currentX, currentY, navFrame, elapsedTime = nil, nil, nil, 0
+    currentX, currentY, navFrame, lastFrame = nil, nil, nil, nil
+    placedX, placedY = nil, nil
     restoring = false
     active = true
     return true
@@ -137,7 +134,8 @@ end
 function API.Disable()
     if not active and not restoring then return end
     active = false
-    currentX, currentY, elapsedTime = nil, nil, 0
+    currentX, currentY, lastFrame = nil, nil, nil
+    placedX, placedY = nil, nil
     restoring = true
     Restore()
 end

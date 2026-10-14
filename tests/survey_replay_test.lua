@@ -1,4 +1,5 @@
 local addon = {}
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile("Data/SurveyReplay.lua"))("VignetteRadar", addon)
 local api = addon.VignetteRadarSurveyReplay
 local saved = {}
@@ -63,4 +64,18 @@ end
 assert(#api.GetTimeline() == 256, "replay ring must stay capped")
 assert(api.SaveReplay("Bounded", 6000))
 assert(#api.GetSavedReplays()[1].events == 128, "saved excerpt must stay capped")
+-- A zone that stays inside the cap keeps all of its cells, even ones older
+-- than the zone that falls out.
+local capped = { coverage = {} }
+local function cell(mapID, key, at)
+    capped.coverage[#capped.coverage+1] = { character="Trim-Realm", mapID=mapID,
+        cell=key, size=.025, at=at }
+end
+cell(500, "0:0", 1000)
+for zone = 1, 24 do cell(600 + zone, "1:1", 1000 + zone) end
+cell(500, "2:2", 1100)
+api.Initialize(capped, "Trim-Realm")
+assert(select(2, api.GetCoverage(500)) == 2, "a retained zone must keep its older cells")
+assert(select(2, api.GetCoverage(601)) == 0, "the oldest zone past the cap is dropped")
+assert(select(2, api.GetCoverage(624)) == 1)
 io.write("survey and replay tests passed\n")

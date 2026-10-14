@@ -7,7 +7,6 @@ addon.VignetteRadarAtlas = API
 local MAX_MARKERS = 128
 local CIRCLE = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 local SQUARE = "Interface\\Buttons\\WHITE8X8"
-local FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
 local COLORS = {
     live = { .10, .95, .68 },
     quest = { 1, .75, .24 },
@@ -16,6 +15,13 @@ local COLORS = {
     unknown = { .67, .72, .76 },
 }
 local PRIORITY = { live = 1, quest = 2, observed = 3, saved = 4, unknown = 5 }
+local DESCRIPTIONS = {
+    live = "Live local detection.",
+    quest = "Quest objective or area.",
+    observed = "Observed previously; current presence is unknown.",
+    saved = "Saved map location; current presence is unknown.",
+    unknown = "Location evidence is unknown.",
+}
 local mapID, entries, isOpen = nil, {}, false
 local canvas, status, markers, selectedCallback, hookedMap
 local Draw
@@ -54,7 +60,7 @@ local function NewMarker(parent)
     button.icon = button:CreateTexture(nil, "ARTWORK")
     button.icon:SetAllPoints(button)
     button.count = button:CreateFontString(nil, "OVERLAY")
-    button.count:SetFont(FONT, 11, "OUTLINE")
+    addon.VignetteRadarStyle.SetFont(button.count, 11, "OUTLINE")
     button.count:SetPoint("CENTER", button, "CENTER", 0, 0)
     button:SetScript("OnEnter", function(self)
         if GameTooltip then
@@ -84,6 +90,11 @@ local function EnsureUI()
         if type(hooksecurefunc) == "function" and type(map.SetMapID) == "function" then
             hooksecurefunc(map, "SetMapID", function() if isOpen then Draw() end end)
         end
+        -- Closing the world map ends the overlay too, so nothing keeps drawing
+        -- (or stays "open") on a hidden map.
+        if type(map.HookScript) == "function" then
+            map:HookScript("OnHide", function() if isOpen then API.Close() end end)
+        end
         hookedMap = map
     end
     if canvas and canvas:GetParent() == child then return map end
@@ -103,7 +114,7 @@ local function EnsureUI()
     background:SetAllPoints(status)
     background:SetColorTexture(.012, .025, .035, .86)
     status.label = status:CreateFontString(nil, "OVERLAY")
-    status.label:SetFont(FONT, 11, "OUTLINE")
+    addon.VignetteRadarStyle.SetFont(status.label, 11, "OUTLINE")
     status.label:SetPoint("LEFT", status, "LEFT", 10, 0)
     status.label:SetTextColor(.88, .94, .96)
     return map
@@ -166,13 +177,8 @@ Draw = function()
         button.entry, button.groupCount = cell.entry, cell.count
         button.title = tostring(cell.entry.name or cell.entry.title or "Atlas Location")
         button.description = cell.entry.coverage and
-            "Visited ground from Survey Mode; this does not prove a target is present." or ({
-            live = "Live local detection.",
-            quest = "Quest objective or area.",
-            observed = "Observed previously; current presence is unknown.",
-            saved = "Saved map location; current presence is unknown.",
-            unknown = "Location evidence is unknown.",
-        })[cell.evidence]
+            "Visited ground from Survey Mode; this does not prove a target is present."
+            or DESCRIPTIONS[cell.evidence]
         button:ClearAllPoints()
         button:SetPoint("CENTER", canvas, "TOPLEFT", cell.x * canvas:GetWidth(), -cell.y * canvas:GetHeight())
         local color = COLORS[cell.evidence]

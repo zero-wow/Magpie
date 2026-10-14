@@ -10,21 +10,12 @@ local LABELS = { cave = "Cave", group = "Group", treasure = "Treasure Hunt",
     questing = "Questing", travel = "Travel" }
 local MAX_FILTERS, MAX_NAME = 16, 48
 
-local function Safe(value)
-    if type(issecretvalue) ~= "function" then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and not secret
-end
-
-local function Field(record, key)
-    if type(record) ~= "table" or not Safe(record) then return nil end
-    local ok, value = pcall(function() return record[key] end)
-    return ok and Safe(value) and value or nil
-end
+local Safe, Field = addon.Secret.Safe, addon.Secret.Field
+local SecretNumber = addon.Secret.Number
 
 local function Number(value, default, minimum, maximum)
-    if not Safe(value) or type(value) ~= "number" or value ~= value
-        or value == math.huge or value == -math.huge then return default end
+    value = SecretNumber(value)
+    if value == nil then return default end
     return math.max(minimum, math.min(maximum, value))
 end
 
@@ -48,11 +39,13 @@ local function CopyPreset(config)
     return result
 end
 
+-- settings is the director's own copy, so it is indexed directly.
 local function Context(snapshot, settings)
     if type(snapshot) ~= "table" or not Safe(snapshot) then return nil end
-    for _, name in ipairs(ORDER) do
-        local configured = Field(settings.contexts, name)
-        if Field(configured, "enabled") == true and Field(snapshot, name) == true then
+    local contexts = settings.contexts
+    for index = 1, #ORDER do
+        local name = ORDER[index]
+        if contexts[name].enabled and Field(snapshot, name) == true then
             return name
         end
     end
@@ -67,6 +60,30 @@ function Director.New(settings)
     return self
 end
 
+local function SamePreset(a, b)
+    if a.enabled ~= b.enabled or a.preset ~= b.preset or a.range ~= b.range
+        or a.audio ~= b.audio then return false end
+    for key, value in pairs(a.filters) do
+        if b.filters[key] ~= value then return false end
+    end
+    for key in pairs(b.filters) do
+        if a.filters[key] == nil then return false end
+    end
+    return true
+end
+
+local function SameSettings(a, b)
+    if not (a and b and a.contexts and b.contexts) then return false end
+    if a.enabled ~= b.enabled or a.enterSeconds ~= b.enterSeconds
+        or a.exitSeconds ~= b.exitSeconds
+        or a.manualHoldSeconds ~= b.manualHoldSeconds then return false end
+    for index = 1, #ORDER do
+        local name = ORDER[index]
+        if not SamePreset(a.contexts[name], b.contexts[name]) then return false end
+    end
+    return true
+end
+
 function Director:Configure(settings)
     settings = type(settings) == "table" and Safe(settings) and settings or {}
     local sourceContexts = Field(settings, "contexts")
@@ -77,13 +94,16 @@ function Director:Configure(settings)
         preset.enabled = Field(source, "enabled") == true
         contexts[name] = preset
     end
-    self.settings = {
+    local normalized = {
         enabled = Field(settings, "enabled") == true,
         enterSeconds = Number(Field(settings, "enterSeconds"), 2.5, 0, 30),
         exitSeconds = Number(Field(settings, "exitSeconds"), 2.5, 0, 30),
         manualHoldSeconds = Number(Field(settings, "manualHoldSeconds"), 30, 0, 600),
         contexts = contexts,
     }
+    -- Only a real change bumps the revision; it forces the overlay to reapply.
+    if SameSettings(self.settings, normalized) then return end
+    self.settings = normalized
     self.revision = (self.revision or 0) + 1
 end
 

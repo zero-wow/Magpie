@@ -7,7 +7,6 @@ local trail, trailMap, lastTrailAt = {}, nil, 0
 local seen, seenMap = {}, nil
 local approachInside, approachMap = {}, nil
 local manualUntil, autoRange = 0, nil
-local focusedQuestID
 local focusedQuestMisses = 0
 local MAX_PINS, MAX_ROUTE, MAX_JOURNAL, MAX_TRAIL = 60, 8, 100, 150
 local MAX_CUSTOM_PRESETS = 8
@@ -18,19 +17,16 @@ local walkRecording, walkMessage
 local MAX_WALK_POINTS, MAX_WALK_PATHS = 512, 8
 
 local function Settings() return addon.GetSettings() end
-local function Number(value)
-    if issecretvalue and issecretvalue(value) then return nil end
-    return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge and value or nil
-end
+local Number, Safe = addon.Secret.Number, addon.Secret.Safe
+-- Keeps "" (unlike Secret.Text) and cuts long names to 80 bytes.
 local function Text(value)
-    if issecretvalue and issecretvalue(value) then return nil end
-    return type(value) == "string" and value:sub(1, 80) or nil
+    return type(value) == "string" and Safe(value) and value:sub(1, 80) or nil
 end
 local function Now() return GetTime and GetTime() or 0 end
 local function Time() return time and time() or 0 end
 local function Tell(value)
     if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
-        DEFAULT_CHAT_FRAME:AddMessage("Vignette Radar: " .. value)
+        DEFAULT_CHAT_FRAME:AddMessage("Magpie: " .. value)
     end
 end
 local function Refresh()
@@ -60,33 +56,36 @@ function API.Range(player, focused)
     return autoRange
 end
 
+-- The focused quest is the shared Focus selection when it is a quest.
+-- Clicking the focused quest again clears it, and its waypoint with it.
 function API.FocusQuest(questID, point)
+    local focus = addon.VignetteRadarFocus
     questID = Number(questID)
-    if focusedQuestID == questID then focusedQuestID = nil else focusedQuestID = questID end
     focusedQuestMisses = 0
-    if focusedQuestID and addon.VignetteRadarWorldFocus then
-        if point and Number(point.mapID) and Number(point.mapX) and Number(point.mapY) then
-            addon.VignetteRadarWorldFocus.SelectPoint({ kind = "quest", questID = focusedQuestID,
-                name = point.name, colorSlot = point.colorSlot,
-                mapID = point.mapID, mapX = point.mapX, mapY = point.mapY,
-                worldX = point.worldX, worldY = point.worldY, instanceID = point.instanceID })
-        else addon.VignetteRadarWorldFocus.SelectQuest(focusedQuestID) end
-    end
+    if questID then focus.Toggle(focus.Quest(questID, point), { source = "quest" })
+    else focus.Clear({ type = "quest", source = "quest" }) end
     Refresh()
 end
-function API.GetFocusedQuest() return focusedQuestID end
+function API.GetFocusedQuest() return addon.VignetteRadarFocus.GetQuest() end
+-- Restores a focus without moving the waypoint.
 function API.SetQuestFocus(questID)
-    focusedQuestID = Number(questID)
+    local focus = addon.VignetteRadarFocus
+    questID = Number(questID)
     focusedQuestMisses = 0
+    if questID then focus.Select(focus.Quest(questID), { project = false, source = "quest" })
+    else focus.Clear({ type = "quest", project = false, source = "quest" }) end
 end
 function API.ValidateQuestFocus(quests, changedMap)
-    if changedMap then focusedQuestID, focusedQuestMisses = nil, 0; return end
+    local focus = addon.VignetteRadarFocus
+    local focusedQuestID = focus.GetQuest()
+    local drop = { type = "quest", project = false, source = "validate" }
+    if changedMap then focusedQuestMisses = 0; focus.Clear(drop); return end
     if not focusedQuestID then return end
     for _, quest in ipairs(quests or {}) do
         if quest.questID == focusedQuestID then focusedQuestMisses = 0; return end
     end
     focusedQuestMisses = focusedQuestMisses + 1
-    if focusedQuestMisses >= 3 then focusedQuestID, focusedQuestMisses = nil, 0 end
+    if focusedQuestMisses >= 3 then focusedQuestMisses = 0; focus.Clear(drop) end
 end
 
 function API.ObjectiveProgress(questID)
@@ -360,23 +359,18 @@ end
 -- Walk recordings are sampled only while explicitly recording. The saved
 -- form is an eight-stop route, so neither long sessions nor replays add a
 -- per-frame cost to the radar.
-local walkTicker
 local function WalkPaths()
     local db = Settings()
     if type(db.vignetteRadarWalkPaths) ~= "table" then db.vignetteRadarWalkPaths = {} end
     return db.vignetteRadarWalkPaths
 end
+-- A fixed two-second bus ticker; the Update Rate setting must not thin a walk.
 local function StopWalkTicker()
-    if walkTicker then walkTicker:SetScript("OnUpdate", nil) end
+    if addon.Bus then addon.Bus.Cancel("walk") end
 end
 local function StartWalkTicker()
-    if not CreateFrame then return end
-    if not walkTicker then walkTicker = CreateFrame("Frame") end
-    local elapsed = 0
-    walkTicker:SetScript("OnUpdate", function(_, delta)
-        elapsed = elapsed + delta
-        if elapsed < 2 then return end
-        elapsed = 0
+    if not addon.Bus then return end
+    addon.Bus.Every("walk", 2, function()
         if not walkRecording or not walkRecording.active then StopWalkTicker(); return end
         local radar = addon.VignetteRadarAPI
         local player = radar and radar.GetPlayerSnapshot and radar.GetPlayerSnapshot()
@@ -384,7 +378,7 @@ local function StartWalkTicker()
             API.UpdateTrail(player, player.mapID, Now())
             if API.RefreshWalkRecordingStatus then API.RefreshWalkRecordingStatus() end
         end
-    end)
+    end, { scale = false })
 end
 local function WalkPoint(player)
     local x, y = player and Number(player.worldX), player and Number(player.worldY)
@@ -566,31 +560,42 @@ function API.ReplayWalkPath(id, player)
     return true, #route
 end
 
+-- The one saved-watch key, shared by Watch, IsWatched and CheckApproach.
+local function WatchKey(target)
+    if type(target) ~= "table" then return nil end
+    local identity = Number(target.vignetteID) or Text(target.key)
+    return identity and tostring(identity) or nil
+end
 function API.Watch(target)
     if not target or target.sample or target.stale then return false end
-    local identity = Number(target.vignetteID) or Text(target.key)
-    if not identity then return false end
+    local key = WatchKey(target)
+    if not key then return false end
     local watched = Settings().vignetteRadarWatched
     if type(watched) ~= "table" then watched = {}; Settings().vignetteRadarWatched = watched end
-    local key = tostring(identity)
     watched[key] = not watched[key] and true or nil
     Tell(watched[key] and ("Watching " .. (target.name or "detection")) or "Watch removed")
     return watched[key] == true
 end
 function API.IsWatched(target)
     local watched = Settings().vignetteRadarWatched
-    return target and type(watched) == "table" and watched[tostring(Number(target.vignetteID) or target.key)] == true
+    local key = WatchKey(target)
+    return key ~= nil and type(watched) == "table" and watched[key] == true
 end
 function API.CheckApproach(targets, player, mapID)
     if approachMap ~= mapID then approachInside, approachMap = {}, mapID end
     local db = Settings()
     if db.vignetteRadarApproachAlerts ~= true or not player then return nil end
+    local px, py = Number(player.worldX), Number(player.worldY)
+    local watched = db.vignetteRadarWatched
+    if not (px and py) or type(watched) ~= "table" then return nil end
     local threshold = Number(db.vignetteRadarApproachDistance) or 100
     local candidate
     for _, target in ipairs(targets) do
-        if not target.stale and API.IsWatched(target)
+        local tx, ty = Number(target.worldX), Number(target.worldY)
+        local key = not target.stale and tx and ty and WatchKey(target)
+        if key and watched[key] == true
             and (not player.instanceID or not target.instanceID or player.instanceID == target.instanceID) then
-            local dx, dy = target.worldX-player.worldX, target.worldY-player.worldY
+            local dx, dy = tx - px, ty - py
             local within = dx*dx+dy*dy <= threshold*threshold
             if within and approachInside[target.key] == false then candidate = target end
             approachInside[target.key] = within
@@ -656,10 +661,81 @@ function API.DeletePreset(name)
     Settings().vignetteRadarCustomPresets[name] = nil
     API.RefreshPanel()
 end
+-- What a preset changes, copied before it applies, so Undo can put it back.
+-- Kept in the saved settings, so Undo also works after a /reload.
+local function Snapshot(db)
+    local copy = { values = {}, colors = nil, categories = {}, full = true }
+    for _, key in ipairs(presetKeys) do copy.values[key] = db[key] end
+    copy.values.vignetteRadarActivePreset = db.vignetteRadarActivePreset
+    if type(db.vignetteRadarColors) == "table" then
+        copy.colors = {}
+        for slot, color in pairs(db.vignetteRadarColors) do
+            if type(color) == "table" then copy.colors[slot] = { color[1], color[2], color[3] } end
+        end
+    end
+    for key, value in pairs(db.vignetteRadarCategories or {}) do copy.categories[key] = value end
+    return copy
+end
+
+local function Restore(db, copy)
+    for key, value in pairs(copy.values or {}) do db[key] = value end
+    if copy.full then
+        for _, key in ipairs(presetKeys) do
+            if copy.values and copy.values[key] == nil then db[key] = nil end
+        end
+    end
+    if type(copy.colors) == "table" then
+        db.vignetteRadarColors = {}
+        for slot, color in pairs(copy.colors) do db.vignetteRadarColors[slot] = { color[1], color[2], color[3] } end
+    end
+    if type(copy.categories) == "table" and type(db.vignetteRadarCategories) == "table" then
+        for key, value in pairs(copy.categories) do db.vignetteRadarCategories[key] = value end
+    end
+end
+
+function API.CanUndoPreset()
+    return type(Settings().vignetteRadarPresetUndo) == "table"
+end
+
+function API.UndoPreset()
+    local db = Settings()
+    local copy = db.vignetteRadarPresetUndo
+    if type(copy) ~= "table" then return false end
+    Restore(db, copy)
+    db.vignetteRadarPresetUndo = nil
+    if addon.InvalidateSettings then addon.InvalidateSettings() end
+    API.ManualZoom()
+    Refresh()
+    return true
+end
+
+-- One-time repair (2026-10-10): the Treasure preset was clicked by mistake
+-- before Undo existed. These are the settings saved just before it.
+local RESTORE_ONCE_ID = "2026-10-10-treasure"
+local RESTORE_ONCE = {
+    -- Only what the Treasure preset changed; later choices (like a theme) stay.
+    values = { vignetteRadarRange = 10, vignetteRadarLayout = "classic",
+        vignetteRadarQuestDots = true, vignetteRadarQuestAreas = true },
+    categories = { rare = true, treasure = true, event = true, other = true },
+}
+function API.RestoreOnce()
+    local db = Settings()
+    if db.vignetteRadarRestoreOnce == RESTORE_ONCE_ID then return false end
+    db.vignetteRadarRestoreOnce = RESTORE_ONCE_ID
+    Restore(db, RESTORE_ONCE)
+    if addon.InvalidateSettings then addon.InvalidateSettings() end
+    Refresh()
+    return true
+end
+if addon.Bus and type(addon.Bus.On) == "function" then
+    addon.Bus.On("LOGIN", function() pcall(API.RestoreOnce) end)
+end
+
 function API.ApplyPreset(name)
     local db = Settings()
     local preset = builtin[name] or db.vignetteRadarCustomPresets[name]
     if type(preset) ~= "table" then return false end
+    db.vignetteRadarPresetUndo = Snapshot(db)
     for _, key in ipairs(presetKeys) do if preset[key] ~= nil then db[key] = preset[key] end end
     if type(preset.colors) == "table" then
         db.vignetteRadarColors = {}
@@ -686,10 +762,9 @@ API.Tell = Tell
 local panel, selectedPage = nil, "Modes"
 local page = { Pins=1, Journal=1 }
 local customPage = 1
-local FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
 local function Label(parent, value, x, y, width, size)
     local label = parent:CreateFontString(nil, "OVERLAY")
-    label:SetFont(FONT, size or 10, "")
+    addon.VignetteRadarStyle.SetFont(label, size or 10, "")
     label:SetPoint("TOPLEFT", x, y)
     label:SetWidth(width or 300)
     label:SetJustifyH("LEFT")
@@ -697,8 +772,22 @@ local function Label(parent, value, x, y, width, size)
     label:SetText(value)
     return label
 end
+-- Small panel actions draw as atlas icons (UI/IconButton.lua), centered in
+-- the slot the text button had; the label becomes the tooltip.
+local ICON_ACTIONS = {
+    ["×"] = { "close", "Close" }, ["‹"] = { "back", "Previous Page" }, ["›"] = { "next", "Next Page" },
+    Back = { "back", "Previous Route Stop" }, Next = { "next", "Next Route Stop" },
+    Undo = { "undo", "Undo Route Edit" }, Clear = { "clear", "Clear Route" },
+}
 local function Button(parent, title, x, y, width, callback)
     local controls = addon.VignetteRadarControls
+    local icon = ICON_ACTIONS[title]
+    if icon and addon.VignetteRadarIconButton then
+        local button = addon.VignetteRadarIconButton.Create(parent, icon[1], { size = 22, label = icon[2] })
+        button:SetPoint("TOPLEFT", x + math.floor((width - 22) / 2), y)
+        button:SetScript("OnClick", callback)
+        return button
+    end
     title = controls.TitleCase(title)
     local button = (title == "+" or title == "-" or title == "−")
         and controls.IconButton(parent, title, width, 23) or controls.Button(parent, title, width, 23)
@@ -732,7 +821,7 @@ local function Input(parent, x, y, width)
     box:SetBackdrop({ bgFile="Interface\\Buttons\\WHITE8X8", edgeFile="Interface\\Buttons\\WHITE8X8", edgeSize=1 })
     box:SetBackdropColor(.035, .045, .05, .98)
     box:SetBackdropBorderColor(.28, .5, .46, .7)
-    box:SetFontObject(GameFontHighlightSmall)
+    addon.VignetteRadarStyle.SetFont(box, 10, "")
     box:SetTextInsets(6, 6, 0, 0)
     box:SetAutoFocus(false)
     box:SetMaxLetters(60)
@@ -899,8 +988,9 @@ local function BuildPanel()
     for index = 1, 5 do
         panel.draftRows[index] = Label(routePage, "", 5, -144 - (index - 1) * 30, 296, 10)
     end
-    Label(routePage, "Straight-line yards; walk paths record your actual travel.", 5, -294, 296, 9)
-    Button(routePage, "Walk Paths", 5, -313, 296, function()
+    -- The walk recorder is an Advanced Tool; RefreshPanel hides its entry.
+    panel.walkHint = Label(routePage, "Straight-line yards; walk paths record your actual travel.", 5, -294, 296, 8)
+    panel.walkPathsButton = Button(routePage, "Walk Paths", 5, -313, 296, function()
         selectedPage = "Walk"
         API.RefreshPanel()
     end)
@@ -940,14 +1030,14 @@ local function BuildPanel()
     panel.walkRows = {}
     for index=1,4 do
         local y = -153 - (index-1)*36
-        local row = Button(walkPage, "", 5, y, 244, function(self)
+        local row = Button(walkPage, "", 5, y, 240, function(self)
             if not self.path then return end
             local radar = addon.VignetteRadarAPI
             local player = radar and radar.GetPlayerSnapshot and radar.GetPlayerSnapshot()
             local ok, result = API.ReplayWalkPath(self.path.id, player)
             Tell(ok and ("Loaded " .. self.path.name .. " · " .. result .. " stops") or result)
         end)
-        local remove = Button(walkPage, "Delete", 256, y, 45, function()
+        local remove = Button(walkPage, "Delete", 250, y, 51, function()
             if row.path then API.DeleteWalkPath(row.path.id) end
         end)
         panel.walkRows[index] = { load=row, remove=remove }
@@ -995,6 +1085,10 @@ function API.RefreshPanel()
         panel.headerLine:SetColorTexture(ar, ag, ab, .2)
         addon.VignetteRadarControls.RefreshTheme()
     end
+    local advanced = type(addon.AdvancedToolsEnabled) == "function" and addon.AdvancedToolsEnabled()
+    if selectedPage == "Walk" and not advanced and not walkRecording then selectedPage = "Route" end
+    panel.walkHint:SetShown(advanced)
+    panel.walkPathsButton:SetShown(advanced)
     for name, content in pairs(panel.pages) do content:SetShown(name == selectedPage) end
     for name, tab in pairs(panel.tabs) do
         if name == selectedPage then tab:LockHighlight() else tab:UnlockHighlight() end

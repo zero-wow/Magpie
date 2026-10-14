@@ -9,6 +9,9 @@ addon.VignetteRadarPOIs = POIs
 local MAX_NODES = 768
 local PROBE_NODES = 96
 local SOURCE_CACHE_SECONDS = 10
+-- Packs can answer with nothing while they finish loading (phasing, groups,
+-- item data). Retry soon instead of hiding them for the full cache window.
+local EMPTY_CACHE_SECONDS = 2
 local sourceCache, cacheOrder = {}, {}
 local autoChoice
 local ZYGOR_SOURCE = "Zygor POIs"
@@ -16,19 +19,7 @@ local npcNames = {}
 function POIs.Invalidate()
     sourceCache, cacheOrder, autoChoice = {}, {}, nil
 end
-local function Safe(value)
-    return not (type(issecretvalue) == "function" and issecretvalue(value))
-end
-
-local function String(value)
-    return Safe(value) and type(value) == "string" and value ~= "" and value or nil
-end
-
-local function Field(object, key)
-    if not Safe(object) or type(object) ~= "table" then return nil end
-    local ok, value = pcall(function() return object[key] end)
-    return ok and Safe(value) and value or nil
-end
+local Safe, Field, String = addon.Secret.Safe, addon.Secret.Field, addon.Secret.Text
 
 local function NPCName(id)
     id = tonumber(id)
@@ -68,10 +59,20 @@ local function ZygorPoints(mapID)
     return type(zone) == "table" and zone or nil
 end
 
+-- Pack Takeover hides a pack's own HandyNotes pins; VR keeps reading it.
+local function Store() return addon.VignetteRadarPackStore end
+
 local function Enabled(notes, name)
     local profile = notes.db and notes.db.profile
     local enabled = profile and profile.enabledPlugins
-    return not enabled or enabled[name] ~= false
+    if not enabled or enabled[name] ~= false then return true end
+    local store = Store()
+    return store and store.HiddenByVR(name) or false
+end
+
+local function Live(notes, name)
+    local handler = notes and notes.plugins[name]
+    return type(handler) == "table" and type(handler.GetNodes2) == "function" or false
 end
 
 function POIs.Sources()
@@ -83,6 +84,11 @@ function POIs.Sources()
                 sources[#sources + 1] = { id = name, enabled = Enabled(notes, name) }
             end
         end
+    end
+    -- Packs VR saved earlier keep working after the pack itself is disabled.
+    local store = Store()
+    for _, name in ipairs(store and store.Sources() or {}) do
+        if not Live(notes, name) then sources[#sources + 1] = { id = name, enabled = true, saved = true } end
     end
     local poi = _G.ZygorGuidesViewer and Field(_G.ZygorGuidesViewer, "Poi")
     if poi and Field(poi, "DoneLoadingPoints") == true then
@@ -109,9 +115,16 @@ local function CandidateMaps(mapID)
     return maps
 end
 
+-- Returns the visible note count and whether the pack handles this map. A
+-- handled map hands back its node table even while it yields nothing yet.
 local function Probe(handler, mapID)
     local ok, iterator, state, key = pcall(handler.GetNodes2, handler, mapID, false)
-    if not ok or type(iterator) ~= "function" then return 0 end
+    if not ok or type(iterator) ~= "function" then return 0, false end
+    local hasNodes, first = false, nil
+    if Safe(state) and type(state) == "table" then
+        hasNodes, first = pcall(next, state)
+    end
+    local handled = hasNodes and first ~= nil
     local count = 0
     for _ = 1, MAX_NODES do
         local yielded, coord, _, _, _, alpha = pcall(iterator, state, key)
@@ -123,7 +136,7 @@ local function Probe(handler, mapID)
             if count >= PROBE_NODES then break end
         end
     end
-    return count
+    return count, handled or count > 0
 end
 
 -- Query each registered pack for the current map, then its immediate zone
@@ -132,30 +145,64 @@ function POIs.ZoneSources(mapID)
     local notes = HandyNotes()
     if not (type(mapID) == "number" and Safe(mapID)) then return {} end
     local now = type(GetTime) == "function" and GetTime() or nil
-    local registryCount = 0
-    if notes then for _ in pairs(notes.plugins) do registryCount = registryCount + 1 end end
+    -- Key the snapshot on which packs are registered AND enabled, so toggling
+    -- a pack in HandyNotes re-probes at once instead of after the cache expires.
+    local registry = {}
+    if notes then
+        for name in pairs(notes.plugins) do
+            if type(name) == "string" then
+                registry[#registry + 1] = name .. (Enabled(notes, name) and "+" or "-")
+            end
+        end
+    end
+    table.sort(registry)
     local poi = _G.ZygorGuidesViewer and Field(_G.ZygorGuidesViewer, "Poi")
-    if poi and Field(poi, "DoneLoadingPoints") == true then registryCount = registryCount + 1 end
+    if poi and Field(poi, "DoneLoadingPoints") == true then registry[#registry + 1] = ZYGOR_SOURCE end
+    local store = Store()
+    if store then registry[#registry + 1] = "saved" .. store.Generation() end
+    local registryKey = table.concat(registry, "\n")
     local snapshot = sourceCache[mapID]
-    if snapshot and snapshot.registryCount == registryCount
-        and now and snapshot.at and now - snapshot.at < SOURCE_CACHE_SECONDS then
+    if snapshot and snapshot.registryKey == registryKey
+        and now and snapshot.at and now - snapshot.at < snapshot.ttl then
         local cached = {}
         for _, entry in ipairs(snapshot.entries) do
-            if entry.id == ZYGOR_SOURCE or (notes and Enabled(notes, entry.id)) then
+            if entry.id == ZYGOR_SOURCE or entry.saved or (notes and Enabled(notes, entry.id)) then
                 cached[#cached + 1] = entry
             end
         end
         return cached
     end
-    local maps, entries = CandidateMaps(mapID), {}
+    local maps, entries, visible = CandidateMaps(mapID), {}, false
     for name, handler in pairs(notes and notes.plugins or {}) do
         if type(name) == "string" and type(handler) == "table"
             and type(handler.GetNodes2) == "function" and Enabled(notes, name) then
+            local found, handledAt
             for depth, candidate in ipairs(maps) do
-                local count = Probe(handler, candidate)
+                local count, handled = Probe(handler, candidate)
                 if count > 0 then
-                    entries[#entries + 1] = { id = name, enabled = true,
+                    found = { id = name, enabled = true,
                         mapID = candidate, depth = depth - 1, count = count }
+                    break
+                elseif handled and not handledAt then
+                    handledAt = { id = name, enabled = true,
+                        mapID = candidate, depth = depth - 1, count = 0 }
+                end
+            end
+            found = found or handledAt
+            if found then
+                entries[#entries + 1] = found
+                if found.count > 0 then visible = true end
+            end
+        end
+    end
+    for _, name in ipairs(store and store.Sources() or {}) do
+        if not Live(notes, name) then
+            for depth, candidate in ipairs(maps) do
+                local count = store.Count(name, candidate)
+                if count > 0 then
+                    entries[#entries + 1] = { id = name, enabled = true, saved = true,
+                        mapID = candidate, depth = depth - 1, count = math.min(count, PROBE_NODES) }
+                    visible = true
                     break
                 end
             end
@@ -166,6 +213,7 @@ function POIs.ZoneSources(mapID)
         if zone and #zone > 0 then
             entries[#entries + 1] = { id = ZYGOR_SOURCE, enabled = true,
                 mapID = candidate, depth = depth - 1, count = math.min(#zone, PROBE_NODES) }
+            visible = true
             break
         end
     end
@@ -174,7 +222,8 @@ function POIs.ZoneSources(mapID)
         cacheOrder[#cacheOrder + 1] = mapID
         if #cacheOrder > 8 then sourceCache[table.remove(cacheOrder, 1)] = nil end
     end
-    sourceCache[mapID] = { registryCount = registryCount, at = now, entries = entries }
+    sourceCache[mapID] = { registryKey = registryKey, at = now, entries = entries,
+        ttl = visible and SOURCE_CACHE_SECONDS or EMPTY_CACHE_SECONDS }
     return entries
 end
 
@@ -223,17 +272,22 @@ function POIs.ResolveSource(mapID, chosen)
             and autoChoice.id == entry.id then sticky = entry end
         if chosen == "auto" and entry.id ~= ZYGOR_SOURCE then
             local affinity = NameAffinity(entry.id, names)
-            if not best or affinity > bestAffinity
-                or (affinity == bestAffinity and entry.depth < best.depth)
-                or (affinity == bestAffinity and entry.depth == best.depth and entry.count > best.count)
-                or (affinity == bestAffinity and entry.depth == best.depth
+            local shows, bestShows = entry.count > 0, best and best.count > 0
+            if not best or (shows and not bestShows)
+                or (shows == bestShows and affinity > bestAffinity)
+                or (shows == bestShows and affinity == bestAffinity and entry.depth < best.depth)
+                or (shows == bestShows and affinity == bestAffinity
+                    and entry.depth == best.depth and entry.count > best.count)
+                or (shows == bestShows and affinity == bestAffinity and entry.depth == best.depth
                     and entry.count == best.count and entry.id < best.id) then
                 best, bestAffinity = entry, affinity
             end
         end
     end
     if sticky and best and NameAffinity(sticky.id, names) == bestAffinity
-        and sticky.depth == best.depth then best = sticky end
+        and sticky.depth == best.depth and (sticky.count > 0) == (best.count > 0) then
+        best = sticky
+    end
     if chosen == "auto" then autoChoice = best and { mapID = mapID, id = best.id } or nil end
     return best and best.id or nil, best and best.mapID or nil
 end
@@ -402,10 +456,16 @@ function POIs.Collect(mapID, source, mapToWorld, mapVector)
         end
         return results
     end
-    if not notes then return results end
+    local store = Store()
+    if not Live(notes, source) then
+        -- The pack is gone (disabled or removed): read VR's saved copy.
+        for _, note in ipairs(store and store.Load(source, mapID, mapToWorld, mapVector) or {}) do
+            results[#results + 1] = note
+        end
+        return results
+    end
     local handler = notes.plugins[source]
-    if not (type(handler) == "table" and type(handler.GetNodes2) == "function"
-        and Enabled(notes, source)) then return results end
+    if not Enabled(notes, source) then return results end
     local ok, iterator, state, key = pcall(handler.GetNodes2, handler, mapID, false)
     if not ok or type(iterator) ~= "function" then return results end
     for _ = 1, MAX_NODES do
@@ -435,6 +495,8 @@ function POIs.Collect(mapID, source, mapToWorld, mapVector)
                     icon = IconDescriptor(iconpath, iconScale, alpha),
                     route = RouteSteps(Route(node, coord), pointMapID, mapToWorld, mapVector),
                     parentCoord = kind == "entrance" and tonumber(Field(Field(node, "_main"), "_coord")) or nil,
+                    -- Pack loot for the Collection Lens (Data/CollectionLens.lua); nil = no loot data.
+                    loot = addon.VignetteRadarCollectionLens and addon.VignetteRadarCollectionLens.Read(node) or nil,
                 }
             end
         end
@@ -473,5 +535,6 @@ function POIs.Collect(mapID, source, mapToWorld, mapVector)
             end
         end
     end
+    if store then store.Save(source, mapID, results) end
     return results
 end

@@ -9,17 +9,7 @@ addon.VignetteRadarResetPlanner = API
 local MAX_GOALS = 256
 local TYPES = { daily=true, weekly=true, ["one-time"]=true, unknown=true }
 
-local function Safe(value)
-    if type(issecretvalue) ~= "function" then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and secret ~= true
-end
-
-local function Field(value, key)
-    if not Safe(value) or type(value) ~= "table" then return nil end
-    local ok, result = pcall(function() return value[key] end)
-    if ok and Safe(result) then return result end
-end
+local Safe, Field = addon.Secret.Safe, addon.Secret.Field
 
 local function Label(value, limit)
     return Safe(value) and type(value) == "string" and #value > 0

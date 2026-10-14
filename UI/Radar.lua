@@ -32,12 +32,12 @@ local TRAIL_LIFETIMES = { 1, 300 }
 local ACCENT = { 0.05, 0.82, 0.62 }
 local RED = { 1, 0.18, 0.14 }
 local CIRCLE_TEXTURE = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
-local QUEST_DIAMOND_TEXTURE = "Interface\\AddOns\\VignetteRadar\\Media\\quest-diamond.tga"
-addon.VignetteRadarQuestHollowTexture = "Interface\\AddOns\\VignetteRadar\\Media\\quest-diamond-hollow.tga"
+local QUEST_DIAMOND_TEXTURE = "Interface\\AddOns\\Magpie\\Media\\quest-diamond.tga"
+addon.VignetteRadarQuestHollowTexture = "Interface\\AddOns\\Magpie\\Media\\quest-diamond-hollow.tga"
 local SQUARE_TEXTURE = "Interface\\Buttons\\WHITE8X8"
-local ROUNDED_SQUARE_TEXTURE = "Interface\\AddOns\\VignetteRadar\\Media\\radar-rounded-square.tga"
-local ROUNDED_BORDER_TEXTURE = "Interface\\AddOns\\VignetteRadar\\Media\\radar-rounded-border.tga"
-local ROUNDED_CONTROL_TEXTURE = "Interface\\AddOns\\VignetteRadar\\Media\\control-rounded-square.tga"
+local ROUNDED_SQUARE_TEXTURE = "Interface\\AddOns\\Magpie\\Media\\radar-rounded-square.tga"
+local ROUNDED_BORDER_TEXTURE = "Interface\\AddOns\\Magpie\\Media\\radar-rounded-border.tga"
+local ROUNDED_CONTROL_TEXTURE = "Interface\\AddOns\\Magpie\\Media\\control-rounded-square.tga"
 local QUEST_CLIP_INSET = 4
 local QUEST_AREA_BLUE = { .34, .60, 1 }
 local TASK_AREA_COLORS = {
@@ -68,7 +68,7 @@ function routeMenu.SetTrackedRouteTexture(texture, kind, state)
         or kind == "quest" and 2 or kind == "zygor" and 3
     if column then
         local row = state or 0
-        texture:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\radar-route-types.tga")
+        texture:SetTexture("Interface\\AddOns\\Magpie\\Media\\radar-route-types.tga")
         texture:SetTexCoord((column * 64 + 1) / 256, (column * 64 + 63) / 256,
             (row * 64 + 1) / 256, (row * 64 + 63) / 256)
     end
@@ -112,16 +112,16 @@ local function Settings()
     return addon.GetSettings()
 end
 
-function addon.VignetteRadarRenderSeconds()
-    local mode = Settings().vignetteRadarPerformance
+function addon.VignetteRadarRenderSeconds(settings)
+    local mode = (settings or Settings()).vignetteRadarPerformance
     if addon.VignetteRadarBudget and addon.VignetteRadarBudget.softThrottle then
         return .25
     end
     return mode == "low" and .25 or mode == "balanced" and .15 or .1
 end
 
-function addon.VignetteRadarScanSeconds()
-    local mode = Settings().vignetteRadarPerformance
+function addon.VignetteRadarScanSeconds(settings)
+    local mode = (settings or Settings()).vignetteRadarPerformance
     if addon.VignetteRadarBudget and addon.VignetteRadarBudget.softThrottle then
         return 2.5
     end
@@ -160,6 +160,9 @@ local function DrawTrailGlyph(definition, primary, extras, frame, x, y, ux, uy, 
         line:Show()
     end
 end
+
+-- Shared with UI/LeadTrail.lua so Lead marks are drawn by the same glyph code.
+addon.VignetteRadarTrailGlyph = DrawTrailGlyph
 
 local function TrailFadeMultiplier(progress, amount, span)
     if amount <= 0 or span <= 0 then return 1 end
@@ -221,11 +224,19 @@ end
 
 local function StepRange(step)
     local ranges, current = Ranges(), displayedRange or Settings().vignetteRadarRange
-    for index, value in ipairs(ranges) do
-        if current == value then
-            local nextIndex = math.max(1, math.min(#ranges, index + step))
-            addon.SetVignetteRadarRange(ranges[nextIndex])
-            return
+    -- The Minimap Underlay snaps the drawn range to a map zoom, often off
+    -- this list: step to the next entry that draws a different range.
+    local underlay = addon.VignetteRadarMinimapUnderlay
+    local first, last, dir = 1, #ranges, 1
+    if step < 0 then first, last, dir = #ranges, 1, -1 end
+    for index = first, last, dir do
+        local value = ranges[index]
+        if (dir > 0 and value > current) or (dir < 0 and value < current) then
+            local shown = underlay and underlay.Snap and underlay.Snap(value, panel) or value
+            if shown ~= current then
+                addon.SetVignetteRadarRange(value)
+                return
+            end
         end
     end
 end
@@ -269,11 +280,16 @@ local function IsSecret(value)
     return type(issecretvalue) == "function" and issecretvalue(value) or false
 end
 
-local function SafeField(object, key)
-    if object == nil or IsSecret(object) then return nil end
-    local ok, value = pcall(function() return object[key] end)
-    if not ok or IsSecret(value) then return nil end
-    return value
+local SafeField
+do
+    -- One static indexer keeps protected reads from allocating a closure.
+    local function Index(object, key) return object[key] end
+    SafeField = function(object, key)
+        if object == nil or IsSecret(object) then return nil end
+        local ok, value = pcall(Index, object, key)
+        if not ok or IsSecret(value) then return nil end
+        return value
+    end
 end
 
 local function SafeNumber(value)
@@ -325,7 +341,7 @@ local function CheckUpdateBudget(owner, started, label)
                 if owner._heavyWindows >= 3 then
                     addon.VignetteRadarBudget.softThrottle = true
                     if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
-                        DEFAULT_CHAT_FRAME:AddMessage("Vignette Radar switched to Low CPU updates after sustained high workload. It will restore your selected rate when the load settles.")
+                        DEFAULT_CHAT_FRAME:AddMessage("Magpie switched to Low CPU updates after sustained high workload. It will restore your selected rate when the load settles.")
                     end
                 end
             else
@@ -342,7 +358,7 @@ local function CheckUpdateBudget(owner, started, label)
                     addon.VignetteRadarBudget.softThrottle = false
                     owner._quietWindows = 0
                     if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
-                        DEFAULT_CHAT_FRAME:AddMessage("Vignette Radar restored your selected update rate after the load settled.")
+                        DEFAULT_CHAT_FRAME:AddMessage("Magpie restored your selected update rate after the load settled.")
                     end
                 end
             else owner._quietWindows = 0 end
@@ -368,7 +384,7 @@ local function CheckUpdateBudget(owner, started, label)
     owner._budgetUpdate = update
     owner:SetScript("OnUpdate", nil)
     addon.VignetteRadarBudget.paused[label] = true
-    local message = "Vignette Radar paused automatic " .. label
+    local message = "Magpie paused automatic " .. label
         .. " updates after excessive CPU time. Retrying in " .. delay .. " seconds."
     if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
         DEFAULT_CHAT_FRAME:AddMessage(message)
@@ -388,9 +404,9 @@ end
 
 local function Call(func, ...)
     if type(func) ~= "function" then return nil end
-    local results = { pcall(func, ...) }
-    if not results[1] then return nil end
-    return Unpack(results, 2)
+    local ok, first, second, third, fourth = pcall(func, ...)
+    if not ok then return nil end
+    return first, second, third, fourth
 end
 
 local function ReadXY(vector)
@@ -473,7 +489,7 @@ local function ClassifyVignette(info)
     return "other"
 end
 
-local function CollectVignettes(mapID)
+local function CollectVignettes(mapID, player)
     local targets = {}
     if not (mapID and C_VignetteInfo and C_VignetteInfo.GetVignettes
         and C_VignetteInfo.GetVignetteInfo and C_VignetteInfo.GetVignettePosition) then
@@ -554,7 +570,7 @@ local function CollectVignettes(mapID)
         end
     end
     -- Nearby entries get first claim on the bounded state pool in crowded zones.
-    local player = PlayerSnapshot(mapID)
+    if player == nil then player = PlayerSnapshot(mapID) end
     for _, target in ipairs(targets) do
         target.favorite = Features() and Features().IsFavorite(target) or false
         if player and (not player.instanceID or not target.instanceID or player.instanceID == target.instanceID) then
@@ -574,15 +590,18 @@ end
 
 local function CollectQuests(mapID, force)
     local quests = {}
+    local db = Settings()
     if not (mapID and C_QuestLog
         and (C_QuestLog.GetQuestsOnMap or C_TaskQuest and C_TaskQuest.GetQuestsOnMap)
-        and (force or Settings().vignetteRadarQuestDots or Settings().vignetteRadarQuestAreas
-            or (Settings().vignetteRadarBeaconsEnabled and Settings().vignetteRadarBeaconQuests)
-            or Settings().vignetteRadarWorldFocusEnabled)) then
+        and (force or db.vignetteRadarQuestDots or db.vignetteRadarQuestAreas
+            or (db.vignetteRadarBeaconsEnabled and db.vignetteRadarBeaconQuests)
+            or db.vignetteRadarWorldFocusEnabled)) then
         return quests
     end
-    local records = C_QuestLog.GetQuestsOnMap and Call(C_QuestLog.GetQuestsOnMap, mapID)
-    if IsSecret(records) or type(records) ~= "table" then records = {} end
+    -- A live read through Data/QuestService.lua (the radar keeps its own
+    -- five-second cache); the quest tracker then reuses it in this frame.
+    local onMap = addon.Quests.OnMap(mapID, true)
+    local records = onMap.quests
     local seen = {}
     local seenQuest = {}
     local function QuestType(questID, taskRecord)
@@ -633,7 +652,7 @@ local function CollectQuests(mapID, force)
         local x, y = SafeNumber(SafeField(record, "x")), SafeNumber(SafeField(record, "y"))
         if questID and questID > 0 and x and y and x >= 0 and x <= 1 and y >= 0 and y <= 1 then
             local nextStep
-            if Settings().vignetteRadarNextQuestStep and index <= 64 and not seenQuest[questID]
+            if db.vignetteRadarNextQuestStep and index <= 64 and not seenQuest[questID]
                 and addon.VignetteRadarQuestData then
                 nextStep = addon.VignetteRadarQuestData.GetNextStep(questID, mapID)
             end
@@ -650,32 +669,20 @@ local function CollectQuests(mapID, force)
         end
     end
     -- Task quests are not consistently included in the ordinary quest map API.
-    if C_TaskQuest and type(C_TaskQuest.GetQuestsOnMap) == "function" then
-        local taskRecords = Call(C_TaskQuest.GetQuestsOnMap, mapID)
-        if type(taskRecords) == "table" and not IsSecret(taskRecords) then
-            for index = 1, math.min(#taskRecords, 128) do
-                local record = taskRecords[index]
-                local questID = SafeNumber(SafeField(record, "questID"))
-                    or SafeNumber(SafeField(record, "questId"))
-                AddPoint(questID, SafeNumber(SafeField(record, "x")),
-                    SafeNumber(SafeField(record, "y")),
-                    SafeString(SafeField(record, "name")), nil, nil, nil, record)
-            end
-        end
+    for _, record in ipairs(onMap.tasks) do
+        AddPoint(record.questID, record.x, record.y, record.name, nil, nil, nil, record)
     end
     -- Blizzard can provide a waypoint for a watched quest even when its
     -- quest-level map record is absent. Keep that objective and its blob visible.
     if C_QuestLog.GetNumQuestWatches and C_QuestLog.GetQuestIDForQuestWatchIndex
         and C_QuestLog.GetNextWaypointForMap then
-        local watchCount = SafeNumber(Call(C_QuestLog.GetNumQuestWatches)) or 0
-        for index = 1, math.min(watchCount, 40) do
-            local questID = SafeNumber(Call(C_QuestLog.GetQuestIDForQuestWatchIndex, index))
-            if questID and questID > 0 and not seenQuest[questID] then
+        for _, questID in ipairs(addon.Quests.WatchedIDs(false, true)) do
+            if questID > 0 and not seenQuest[questID] then
                 local x, y = Call(C_QuestLog.GetNextWaypointForMap, questID, mapID)
                 x, y = SafeNumber(x), SafeNumber(y)
                 if x and y then
                     AddPoint(questID, x, y)
-                elseif Settings().vignetteRadarLearnedQuestHints
+                elseif db.vignetteRadarLearnedQuestHints
                     and addon.VignetteRadarOutcomeLearning then
                     local hint = addon.VignetteRadarOutcomeLearning.GetQuestHint(questID, mapID)
                     if hint then
@@ -734,9 +741,7 @@ addon.VignetteRadarTesting = {
 
 local function Text(parent, size, value, accent)
     local label = parent:CreateFontString(nil, "OVERLAY")
-    local font = EllesmereUI and (EllesmereUI.EXPRESSWAY or EllesmereUI._font)
-        or STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
-    label:SetFont(font or STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", size, "")
+    addon.VignetteRadarStyle.SetFont(label, size, "")
     label:SetTextColor(accent and ACCENT[1] or 0.88, accent and ACCENT[2] or 0.90,
         accent and ACCENT[3] or 0.92, 1)
     label:SetText(value or "")
@@ -883,35 +888,47 @@ local function TargetVisible(target)
     return not focusedKey or focusedKey == target.key
 end
 
-local function SelectableTargets()
-    local output = {}
-    local player = not preview and PlayerSnapshot(CurrentMapID()) or nil
-    local source = preview and PREVIEW_TARGETS or activeTargets
-    local previewRange = tonumber(Settings().vignetteRadarRange) or 450
-    for _, target in ipairs(source) do
-        if CategoryEnabled(target.category) and not Ignored(target) and TargetAlpha(target) > 0 then
-            if preview then
-                target.distance = previewRange * target.distanceFactor
-            elseif player and not (player.instanceID and target.instanceID and player.instanceID ~= target.instanceID) then
-                local dx, dy = target.worldX - player.worldX, target.worldY - player.worldY
-                target.distance = math.sqrt((dx * dx) + (dy * dy))
-            else
-                target.distance = nil
+local SelectableTargets
+do
+    -- Render, the picker and the launcher ask for this list several times per
+    -- frame. Reuse it until the frame, the spatial generation or preview changes.
+    local memo = {}
+    SelectableTargets = function()
+        local frameTime, generation = Now(), addon._spatialGeneration
+        if memo.output and memo.at == frameTime and memo.generation == generation
+            and memo.preview == preview then
+            return memo.output
+        end
+        local output = {}
+        local player = not preview and PlayerSnapshot(CurrentMapID()) or nil
+        local source = preview and PREVIEW_TARGETS or addon.VignetteRadarPoints.Refs("live")
+        local previewRange = tonumber(Settings().vignetteRadarRange) or 450
+        for _, target in ipairs(source) do
+            if CategoryEnabled(target.category) and not Ignored(target) and TargetAlpha(target) > 0 then
+                if preview then
+                    target.distance = previewRange * target.distanceFactor
+                elseif player and not (player.instanceID and target.instanceID and player.instanceID ~= target.instanceID) then
+                    local dx, dy = target.worldX - player.worldX, target.worldY - player.worldY
+                    target.distance = math.sqrt((dx * dx) + (dy * dy))
+                else
+                    target.distance = nil
+                end
+                target.red, target.green, target.blue = TargetColor(target)
+                output[#output + 1] = target
             end
-            target.red, target.green, target.blue = TargetColor(target)
-            output[#output + 1] = target
         end
+        table.sort(output, function(left, right)
+            if Favorite(left) ~= Favorite(right) then return Favorite(left) end
+            if (left.stale == true) ~= (right.stale == true) then return not left.stale end
+            if (left.isWorldBoss == true) ~= (right.isWorldBoss == true) then return left.isWorldBoss == true end
+            if type(left.distance) == "number" and type(right.distance) == "number" and left.distance ~= right.distance then
+                return left.distance < right.distance
+            end
+            return (left.name or left.key or "") < (right.name or right.key or "")
+        end)
+        memo.output, memo.at, memo.generation, memo.preview = output, frameTime, generation, preview
+        return output
     end
-    table.sort(output, function(left, right)
-        if Favorite(left) ~= Favorite(right) then return Favorite(left) end
-        if (left.stale == true) ~= (right.stale == true) then return not left.stale end
-        if (left.isWorldBoss == true) ~= (right.isWorldBoss == true) then return left.isWorldBoss == true end
-        if type(left.distance) == "number" and type(right.distance) == "number" and left.distance ~= right.distance then
-            return left.distance < right.distance
-        end
-        return (left.name or left.key or "") < (right.name or right.key or "")
-    end)
-    return output
 end
 
 -- The same explicit gestures work on the radar and in the target list.
@@ -944,21 +961,16 @@ function addon.HandleVignetteClick(target, button)
             }
             reason = messages[reason] or "This detection cannot be tracked right now."
             if UIErrorsFrame and UIErrorsFrame.AddMessage then UIErrorsFrame:AddMessage(reason, 1, 0.65, 0.25)
-            elseif DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("Vignette Radar: " .. reason) end
+            elseif DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("Magpie: " .. reason) end
         end
         return ok, reason
     elseif alt and features then
         if not target.sample then features.ToggleFavorite(target) end
     else
-        local picker = TargetPickerAPI()
-        if picker then
-            if picker.GetFocus() == target.key then picker.ClearFocus()
-            else
-                picker.SetFocus(target.key, target.name)
-                local worldFocus = addon.VignetteRadarWorldFocus
-                if worldFocus then worldFocus.SelectTarget(target) end
-            end
-        end
+        -- One selection for every view; clicking the focused target again
+        -- clears it and the waypoint it placed.
+        local focus = addon.VignetteRadarFocus
+        focus.Toggle(focus.Target(target), { source = "radar" })
         return true
     end
     RefreshRadar(true)
@@ -1024,6 +1036,7 @@ local function Tooltip(owner)
     if Favorite(target) then status = status .. " · Favorite" end
     local focused = FocusedTargetKey() == target.key
     if focused then status = status .. " · Focused" end
+    if addon.VignetteRadarGuidance then addon.VignetteRadarGuidance.AddTooltipLines(GameTooltip, target) end
     GameTooltip:AddLine(status, .55, .86, .76)
     GameTooltip:AddLine(focused and "Click to Show All" or "Click to Focus", .65, .80, .77)
     GameTooltip:Show()
@@ -1034,22 +1047,24 @@ local SHAPES = {
     event = { { -0.5, 0.5 }, { 0.5, 0.5 }, { 0.5, -0.5 }, { -0.5, -0.5 } },
 }
 
--- Use familiar game imagery first, with vector fallbacks for missing client art.
+-- Use Blizzard's own icons first (Points.Icon: the vignette's atlas, else
+-- VignetteKill/Loot/Event), with vector fallbacks for missing client art.
 local function StyleMarker(owner, dot, target, size, r, g, b)
     owner.shapeLines = owner.shapeLines or {}
     local icons = Settings().vignetteRadarShapes ~= false
     local points = icons and SHAPES[target.category] or nil
-    dot:SetTexture(CIRCLE_TEXTURE)
     local iconSize, nativeIcon = size, false
-    if icons and target.category == "rare" then
-        dot:SetTexture(SKULL_TEXTURE)
-        iconSize = size + (owner.isMini and 2 or 5) + (target.isWorldBoss and 2 or 0)
-        nativeIcon, points = true, nil
-    elseif icons and not owner.isMini and target.atlasName and dot.SetAtlas then
-        local atlas = C_Texture and C_Texture.GetAtlasInfo and Call(C_Texture.GetAtlasInfo, target.atlasName)
-        if atlas and pcall(dot.SetAtlas, dot, target.atlasName) then
-            iconSize, nativeIcon, points = size + 5, true, nil
+    if icons then
+        local registry = addon.VignetteRadarPoints
+        local icon = registry.Icon(target)
+        if icon.atlas and registry.ApplyIcon(dot, icon, target, CIRCLE_TEXTURE).atlas then
+            iconSize = size + (owner.isMini and 3 or 6) + (target.isWorldBoss and 2 or 0)
+            nativeIcon, points = true, nil
         end
+    end
+    if not nativeIcon then
+        dot:SetTexture(CIRCLE_TEXTURE)
+        dot:SetTexCoord(0, 1, 0, 1)
     end
     if target.stale and not points then
         points = { { 0, 0.6 }, { 0.6, 0 }, { 0, -0.6 }, { -0.6, 0 } }
@@ -1070,8 +1085,8 @@ local function StyleMarker(owner, dot, target, size, r, g, b)
         elseif line then line:Hide() end
     end
     dot:SetSize(points and math.max(2, size * 0.35) or iconSize, points and math.max(2, size * 0.35) or iconSize)
-    -- Skull silhouettes take category color; other native icons retain their own familiar colors.
-    if nativeIcon and target.category ~= "rare" then dot:SetVertexColor(1, 1, 1, 1)
+    -- Blizzard's icons keep their own colors; vector fallbacks take the category color.
+    if nativeIcon then dot:SetVertexColor(1, 1, 1, 1)
     else dot:SetVertexColor(r, g, b, 1) end
     dot:SetShown(not target.stale)
 end
@@ -1193,36 +1208,12 @@ local function HideMapNotes()
 end
 
 local MAP_NOTE_COLOR = { treasure = "treasure", mob = "rare", item = "event",
-    note = "other", entrance = "accent", guide = "quest" }
+    note = "other", entrance = "accent", guide = "quest", event = "event" }
 local MAP_NOTE_LABEL = { treasure = "Treasure", mob = "Mob", item = "Item",
-    note = "Note", entrance = "Entrance", guide = "Guide step" }
-function addon.VignetteRadarTesting.MapNoteMatchesLive(note, target)
-    if not (note and target and SafeNumber(note.worldX) and SafeNumber(note.worldY)
-        and SafeNumber(target.worldX) and SafeNumber(target.worldY)) then return false end
-    if not ((note.kind == "treasure" and target.category == "treasure")
-        or (note.kind == "mob" and target.category == "rare")) then return false end
-    local dx, dy = note.worldX - target.worldX, note.worldY - target.worldY
-    local distanceSquared = dx * dx + dy * dy
-    if distanceSquared <= 100 then return true end
-    if distanceSquared > 3600 then return false end
-    if note.questID and target.rewardQuestID and note.questID == target.rewardQuestID then return true end
-    local guid = SafeString(target.objectGUID)
-    if guid then
-        local guidKind, id = guid:match("^([A-Za-z]+)%-%d+%-%d+%-%d+%-%d+%-(%d+)%-")
-        if guidKind == "GameObject" and note.objectID and tonumber(id) == note.objectID then return true end
-        if (guidKind == "Creature" or guidKind == "Vehicle")
-            and note.npcID and tonumber(id) == note.npcID then return true end
-    end
-    local noteName = SafeString(note.name)
-    local targetName = SafeString(target.name)
-    if noteName and targetName then
-        noteName = noteName:lower():gsub("[^%w]", "")
-        targetName = targetName:lower():gsub("[^%w]", "")
-        if #noteName >= 6 and noteName == targetName and noteName ~= "treasurelocation"
-            and noteName ~= "moblocation" and noteName ~= "detectedvignette" then return true end
-    end
-    return false
-end
+    note = "Note", entrance = "Entrance", guide = "Guide step",
+    event = "Event", delve = "Delve", race = "Race" }
+-- The note-vs-live identity rule lives in Core/Points.lua (loose form).
+addon.VignetteRadarTesting.MapNoteMatchesLive = addon.VignetteRadarPoints.Matches
 
 local function MapNoteMinimumDistance(range)
     return math.min(9, range * 0.1)
@@ -1231,7 +1222,10 @@ local function RenderMapNotes(player, range, targets)
     local settings = Settings()
     if not (player and (settings.vignetteRadarMapNotesVisible == true
         and (settings.vignetteRadarPOISource ~= "none" or settings.vignetteRadarSourceFusion)
-        or settings.vignetteRadarWorldFocusZygor)) then HideMapNotes(); return 0 end
+        or settings.vignetteRadarWorldFocusZygor or settings.vignetteRadarAreaPOIs == true
+        or settings.vignetteRadarRareSpawnNotes == true)) then
+        HideMapNotes(); return 0
+    end
     -- A 60-yard grid bounds duplicate checks even when the selected pack
     -- contains hundreds of notes and the radar redraws frequently.
     local live = {}
@@ -1260,6 +1254,9 @@ local function RenderMapNotes(player, range, targets)
             and distanceSquared <= rangeSquared
             and addon.KeepCenterMarker("note", note.key, math.sqrt(distanceSquared), range)
             and settings.vignetteRadarPOITypes[note.kind] ~= false
+            -- Duplicate Icons: live area POIs the minimap already draws.
+            and not (note.areaPoiID and panel._underlayHide
+                and (panel._underlayHide.areaPOIs or panel._underlayHide.staticPOIs and not note.endsAt))
             and (not addon.VignetteRadarLensActive
                 or (addon.VignetteRadarLensActive == "quest" and note.kind == "guide")
                 or (addon.VignetteRadarLensActive == "rare" and note.kind == "mob")
@@ -1290,7 +1287,9 @@ local function RenderMapNotes(player, range, targets)
             end
             if not duplicate then
                 local distance = math.sqrt(distanceSquared)
+                -- Area POIs always show Blizzard's own atlas.
                 local usePackIcon = settings.vignetteRadarPOIIcons == true and note.icon ~= nil
+                    or note.areaPoiID ~= nil and note.atlasName ~= nil
                 local x, y = Project(dx, dy, distance, ViewFacing(player.facing),
                     panel.plotRadius - (usePackIcon and 11 or 5), range)
                 if x and y then
@@ -1317,40 +1316,27 @@ local function RenderMapNotes(player, range, targets)
                         dot:SetScript("OnEnter", function(self)
                             if not (GameTooltip and self.note) then return end
                             local entry = self.note
+                            local guidance = addon.VignetteRadarGuidance
                             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
                             GameTooltip:SetText(entry.name, 1, 1, 1)
-                            GameTooltip:AddLine(MAP_NOTE_LABEL[entry.kind] .. " map note · " .. entry.source,
-                                0.72, 0.8, 0.82)
-                            if type(entry.provenance) == "table" and #entry.provenance > 1 then
-                                GameTooltip:AddLine("Also listed by:", .58, .83, .73)
-                                for index = 1, math.min(#entry.provenance, 4) do
-                                    local source = entry.provenance[index]
-                                    if source.source ~= entry.source then
-                                        GameTooltip:AddLine(source.source, .7, .76, .78)
-                                    end
-                                end
-                                if entry.conflicts and (entry.conflicts.coordinates or entry.conflicts.names) then
-                                    GameTooltip:AddLine("Sources disagree; showing your preferred pack.",
-                                        .9, .72, .46, true)
-                                end
-                            end
-                            GameTooltip:AddLine(math.floor(self.distance + 0.5) .. " yd from you", 0.65, 0.7, 0.73)
-                            if entry.note then GameTooltip:AddLine(entry.note, 0.7, 0.76, 0.78, true) end
+                            -- Line 2: kind · source · yards · ETA.
+                            local yards = math.floor(self.distance + 0.5)
+                            local parts = { MAP_NOTE_LABEL[entry.areaKind or entry.kind] or "Note" }
+                            local source = entry.kind == "guide" and "Zygor"
+                                or entry.areaPoiID and "Blizzard" or entry.source
+                            if source then parts[#parts + 1] = tostring(source) end
+                            parts[#parts + 1] = yards .. " yd"
+                            local eta = guidance and guidance.Eta(yards)
+                            if eta then parts[#parts + 1] = eta end
+                            GameTooltip:AddLine(table.concat(parts, " · "), 0.72, 0.8, 0.82)
+                            if entry.note then GameTooltip:AddLine(entry.note, 0.82, 0.86, 0.8, true) end
+                            local facts = guidance and guidance.CompactFacts(entry)
+                            if facts then GameTooltip:AddLine(facts, .78, .86, .74, true) end
                             if entry.route then
-                                GameTooltip:AddLine(#entry.route .. " guided stops: entrance to target.", .58, .83, .73)
+                                GameTooltip:AddLine(#entry.route .. " guided stops", .58, .83, .73)
                             end
-                            if Settings().vignetteRadarWorldFocusEnabled then
-                                GameTooltip:AddLine("Click to set World Focus.", .58, .83, .73)
-                            end
-                            if entry.zygorPoint then
-                                GameTooltip:AddLine("Shift-click: open Zygor's step-by-step guide.", .58, .83, .73)
-                            end
-                            GameTooltip:AddLine(entry.kind == "guide" and "Current Zygor guide waypoint."
-                                or "Saved location, not a live detection.", 0.7, 0.78, 0.72, true)
-                            if (entry.kind == "mob" or entry.kind == "treasure")
-                                and Settings().vignetteRadarHideCleared then
-                                GameTooltip:AddLine("Right-click: hide this location for 1 hour.", .58, .83, .73)
-                            end
+                            local hints = guidance and guidance.MapNoteHints(entry)
+                            if hints then GameTooltip:AddLine(hints, .5, .56, .58, true) end
                             GameTooltip:Show()
                         end)
                         dot:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -1360,7 +1346,10 @@ local function RenderMapNotes(player, range, targets)
                                 and addon.VignetteRadarWorldFocus then
                                 if IsShiftKeyDown and IsShiftKeyDown() and self.note.zygorPoint then
                                     addon.VignetteRadarWorldFocus.LoadZygorGuide(self.note)
-                                else addon.VignetteRadarWorldFocus.SelectNote(self.note) end
+                                else
+                                    addon.VignetteRadarFocus.Select(addon.VignetteRadarFocus.Note(self.note),
+                                        { source = "radar" })
+                                end
                             elseif button == "RightButton" and self.note
                                 and (self.note.kind == "mob" or self.note.kind == "treasure")
                                 and Settings().vignetteRadarHideCleared and addon.VignetteRadarRecent then
@@ -1374,7 +1363,18 @@ local function RenderMapNotes(player, range, targets)
                     local color = addon.VignetteRadarStyle
                     if color then dot.rim:SetVertexColor(color.Color(slot))
                     else dot.rim:SetVertexColor(0.7, 0.75, 0.78, 1) end
-                    if usePackIcon then
+                    if usePackIcon and note.areaPoiID then
+                        if dot._iconNote ~= note then
+                            addon.VignetteRadarPoints.ApplyIcon(dot.icon, nil, note)
+                            dot.icon:SetVertexColor(1, 1, 1, 1)
+                            dot.icon:SetSize(15, 15)
+                            dot._iconNote = note
+                        end
+                        dot:SetSize(18, 18)
+                        dot.rim:Hide()
+                        dot.core:Hide()
+                        dot.icon:Show()
+                    elseif usePackIcon then
                         local icon = note.icon
                         if dot._iconNote ~= note then
                             dot.icon:SetTexture(icon.texture)
@@ -1398,6 +1398,7 @@ local function RenderMapNotes(player, range, targets)
                         dot.core:Show()
                     end
                     dot.note, dot.distance = note, distance
+                    if addon.VignetteRadarCollectionLens then addon.VignetteRadarCollectionLens.Mark(dot, note) end
                     dot:ClearAllPoints()
                     dot:SetPoint("CENTER", panel.field, "CENTER", x, y)
                     addon.VignetteRadarTurn.TrackPoint(dot, x, y, ViewFacing(player.facing))
@@ -1415,7 +1416,8 @@ local function RenderQuestDots(player, range)
     local showHalos = Settings().vignetteRadarQuestAreas and Settings().vignetteRadarQuestHalos
         and panel.questClip and panel.questClip.canClip
     if not ((showDots or showHalos) and player)
-        or (addon.VignetteRadarLensActive and addon.VignetteRadarLensActive ~= "quest") then
+        or (addon.VignetteRadarLensActive and addon.VignetteRadarLensActive ~= "quest")
+        or (panel._underlayHide and panel._underlayHide.quests) then
         HideQuestDots(); return 0
     end
     local haloRadius = math.max(10, math.min(panel.plotRadius,
@@ -1457,8 +1459,7 @@ local function RenderQuestDots(player, range)
                         dot.selection:SetVertexColor(.96, .97, 1, .92)
                         dot.number = Text(dot, 8, "")
                         dot.number:SetPoint("CENTER", dot, "CENTER")
-                        dot.number:SetFont(EllesmereUI and (EllesmereUI.EXPRESSWAY or EllesmereUI._font)
-                            or STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", 9, "OUTLINE")
+                        addon.VignetteRadarStyle.SetFont(dot.number, 9, "OUTLINE")
                         dot.number:SetJustifyH("CENTER")
                         dot.number:SetTextColor(1, 1, 1, 1)
                         dot:EnableMouseWheel(true)
@@ -1504,8 +1505,21 @@ local function RenderQuestDots(player, range)
                         red, green, blue = 1, .74, .27
                     end
                     dot.fill:SetVertexColor(red, green, blue, 1)
-                    if quest.completed then
+                    local registry = addon.VignetteRadarPoints
+                    local icon = registry.Icon(quest)
+                    if dot.shownIcon ~= icon then
+                        dot.shownIcon = icon
+                        dot.atlasShown = icon.atlas ~= nil
+                            and registry.ApplyIcon(dot.rim, icon, quest, QUEST_DIAMOND_TEXTURE).atlas ~= nil
+                    end
+                    if dot.atlasShown then
+                        -- Blizzard's own colors: no tint, no diamond fill or number.
+                        dot.rim:SetSize(16, 16)
+                        dot.rim:SetVertexColor(1, 1, 1, 1)
+                        dot.fill:Hide()
+                    elseif quest.completed then
                         dot.rim:SetTexture(QUEST_DIAMOND_TEXTURE)
+                        dot.rim:SetTexCoord(0, 1, 0, 1)
                         dot.rim:SetSize(13, 13)
                         dot.rim:SetVertexColor(tracked and .95 or .04,
                             tracked and .97 or .05, tracked and .93 or .06, .98)
@@ -1513,6 +1527,7 @@ local function RenderQuestDots(player, range)
                         dot.number:SetTextColor(1, 1, 1, 1)
                     else
                         dot.rim:SetTexture(addon.VignetteRadarQuestHollowTexture)
+                        dot.rim:SetTexCoord(0, 1, 0, 1)
                         -- Match the visible 26px solid silhouette to the hollow file's 30px one.
                         dot.rim:SetSize(13 * 26 / 30, 13 * 26 / 30)
                         dot.rim:SetVertexColor(tracked and .95 or red,
@@ -1521,7 +1536,7 @@ local function RenderQuestDots(player, range)
                         dot.fill:Show()
                         dot.number:SetTextColor(1, 1, 1, 1)
                     end
-                    dot.number:SetText(Settings().vignetteRadarQuestNumbers
+                    dot.number:SetText(Settings().vignetteRadarQuestNumbers and not dot.atlasShown
                         and tostring(quest.colorSlot or 1) or "")
                     local exploration = addon.VignetteRadarExploration
                     local spotlight = exploration and exploration.GetFocusedQuest()
@@ -1611,6 +1626,7 @@ addon.RenderVignetteRadarQuestStarts = function(player, mapID, range)
     local count = 0
     if player and mapID and Settings().vignetteRadarQuestStartBadges
         and (not addon.VignetteRadarLensActive or addon.VignetteRadarLensActive == "quest")
+        and not (panel._underlayHide and panel._underlayHide.quests)
         and addon.VignetteRadarQuestData then
         local starts = addon.VignetteRadarAvailableStarts or {}
         for _, entry in ipairs(starts) do
@@ -1672,7 +1688,7 @@ addon.RenderVignetteRadarQuestStarts = function(player, mapID, range)
                                 local focus = addon.VignetteRadarWorldFocus
                                 if focus and self.entry then
                                     focus.SelectPoint({ kind = "quest", availableStart = true,
-                                        questID = self.entry.questID,
+                                        questID = self.entry.questID, isCampaign = self.entry.isCampaign,
                                         name = self.entry.questName
                                         or self.entry.questLineName or "Quest start",
                                         mapID = activeMapID, mapX = self.entry.x, mapY = self.entry.y,
@@ -1683,11 +1699,30 @@ addon.RenderVignetteRadarQuestStarts = function(player, mapID, range)
                             panel.questStartDots[count] = dot
                         end
                         dot.entry, dot.distance = entry, distance
-                        if entry.isCampaign then dot.rim:SetVertexColor(1, .72, .28, 1)
-                        elseif entry.isImportant then dot.rim:SetVertexColor(.48, .82, 1, 1)
-                        else dot.rim:SetVertexColor(.58, .82, .72, 1) end
-                        dot.glyph:SetText(entry.floor == "above" and "↑"
-                            or entry.floor == "below" and "↓" or "!")
+                        dot.iconItem = dot.iconItem or { kind = "quest", availableStart = true }
+                        dot.iconItem.isCampaign = entry.isCampaign == true
+                        local registry = addon.VignetteRadarPoints
+                        local icon = registry.Icon(dot.iconItem)
+                        if dot.shownIcon ~= icon then
+                            dot.shownIcon = icon
+                            dot.atlasShown = registry.ApplyIcon(dot.rim, icon, dot.iconItem,
+                                QUEST_DIAMOND_TEXTURE).atlas ~= nil
+                        end
+                        local arrow = entry.floor == "above" and "↑" or entry.floor == "below" and "↓"
+                        if dot.atlasShown then
+                            -- Blizzard's own colors; the level arrow rides on top.
+                            dot.rim:SetSize(18, 18)
+                            dot.rim:SetVertexColor(1, 1, 1, 1)
+                            dot.fill:Hide()
+                            dot.glyph:SetText(arrow or "")
+                        else
+                            dot.rim:SetSize(15, 15)
+                            dot.fill:Show()
+                            if entry.isCampaign then dot.rim:SetVertexColor(1, .72, .28, 1)
+                            elseif entry.isImportant then dot.rim:SetVertexColor(.48, .82, 1, 1)
+                            else dot.rim:SetVertexColor(.58, .82, .72, 1) end
+                            dot.glyph:SetText(arrow or "!")
+                        end
                         dot:ClearAllPoints()
                         dot:SetPoint("CENTER", panel.field, "CENTER", x, y)
                         addon.VignetteRadarTurn.TrackPoint(dot, x, y, ViewFacing(player.facing))
@@ -1929,16 +1964,18 @@ local function PlaceBlip(key, screenX, screenY, target, facing)
     blip.cluster, blip.clusterKey = nil, nil
     blip.count:Hide()
     local r, g, b = TargetColor(target)
-    local size = tonumber(Settings().vignetteRadarMarkerSize) or 7
+    local settings = Settings()
+    local size = tonumber(settings.vignetteRadarMarkerSize) or 7
     local hitSize = math.max(14, size + (target.isWorldBoss and 11 or 8))
     blip:SetSize(hitSize, hitSize)
     StyleMarker(blip, blip.dot, target, size, r, g, b)
     local legend = LegendAPI()
-    blip.sourceBadge:SetShown(Settings().vignetteRadarSourceBadges ~= false
+    blip.sourceBadge:SetShown(settings.vignetteRadarSourceBadges ~= false
         and legend and legend.VignetteSource
         and legend.VignetteSource(target) == "worldMap")
     blip.sourceBadge:SetVertexColor(r, g, b, .95)
     blip.favorite:SetShown(Favorite(target))
+    if addon.VignetteRadarCollectionLens then addon.VignetteRadarCollectionLens.Mark(blip, target) end
     local flashing = not Quiet() and target.newUntil and target.newUntil > Now()
     blip.glow:SetVertexColor(r, g, b, flashing and (0.4 + 0.3 * math.sin(Now() * 9)) or 0.18)
     blip.glow:SetShown(not target.stale)
@@ -1961,6 +1998,13 @@ local function RenderExploration(player, range)
     for _, dot in ipairs(panel.trailDots) do dot:Hide() end
     for _, mark in ipairs(panel.trailMarks) do mark:Hide() end
     for _, mark in pairs(panel.trailExtraMarks) do mark:Hide() end
+    if addon.VignetteRadarLeadTrail then
+        addon.VignetteRadarLeadTrail.Render(panel, not addon.VignetteRadarLensActive and player or nil, range)
+    end
+    -- Spawn History Heatmap: faint heat under the markers (UI/SpawnHeatmap.lua).
+    if addon.VignetteRadarSpawnHeatmap then
+        addon.VignetteRadarSpawnHeatmap.Render(panel, not addon.VignetteRadarLensActive and player or nil, range)
+    end
     if not player or addon.VignetteRadarLensActive then return end
     local lineCount, dotCount = 0, 0
     local function Position(item, clamp)
@@ -2507,6 +2551,7 @@ local function UpdatePanelChrome()
     local showButtons = not circleOnly and Settings().vignetteRadarControlsVisible ~= false
     local showTools = circleOnly and Settings().vignetteRadarHoverTools ~= false
         and panel._hoverToolsShown == true
+    local advanced = Settings().vignetteRadarAdvancedTools == true
     local frameButton = panel.frameToggle
     local quick = addon.VignetteRadarQuickConfig
     local legend = LegendAPI()
@@ -2522,6 +2567,7 @@ local function UpdatePanelChrome()
         and panel._chromeHelp == helpShown and panel._chromeFocused == focused
         and panel._chromeRoute == routeActive and panel._chromeQuick == quickShown
         and panel._chromeLegend == legendShown
+        and panel._chromeAdvanced == advanced
         and panel._chromeFrameHover == (frameButton and frameButton._hovered or false)
         and panel._chromeR == ACCENT[1] and panel._chromeG == ACCENT[2]
         and panel._chromeB == ACCENT[3]
@@ -2532,6 +2578,7 @@ local function UpdatePanelChrome()
         panel.layout, helpShown, focused
     panel._chromeRoute, panel._chromeQuick, panel._chromeLegend =
         routeActive, quickShown, legendShown
+    panel._chromeAdvanced = advanced
     panel._chromeFrameHover = frameButton and frameButton._hovered or false
     panel._chromeR, panel._chromeG, panel._chromeB = ACCENT[1], ACCENT[2], ACCENT[3]
     panel._chromeStyleRev = style and style.revision
@@ -2552,9 +2599,20 @@ local function UpdatePanelChrome()
     end
     if panel.emptyHelp then panel.emptyHelp:SetShown(not circleOnly and panel.emptyReason ~= nil) end
     if panel.hoverTools then
-        if panel._hoverToolsVisible ~= showTools then
+        if panel._hoverToolsVisible ~= showTools
+            or panel._hoverFullConstellation ~= showButtons
+            or panel._hoverAdvanced ~= advanced then
             panel._hoverToolsVisible = showTools
-            for _, tool in ipairs(panel.hoverTools) do tool:SetShown(showTools) end
+            panel._hoverFullConstellation = showButtons
+            panel._hoverAdvanced = advanced
+            -- Advanced Tools corners (Constellation, Player Tracker) stay hidden while off.
+            -- Tools gathered into the Button Tray (UI/ButtonTray.lua) are shown by the tray.
+            for _, tool in ipairs(panel.hoverTools) do
+                if not tool._vrInTray then
+                    tool:SetShown((advanced or not tool.advancedTool)
+                        and (showTools or (showButtons and tool.toolID == "constellation")))
+                end
+            end
         end
         if panel.RefreshCornerTools then panel.RefreshCornerTools() end
     end
@@ -2611,7 +2669,8 @@ ApplyAppearance = function()
             math.min(.14, bb * 2.7), CircleOnly() and 0 or .98)
         panel:SetBackdropBorderColor(1, 1, 1, CircleOnly() and 0 or .15)
         panel.title:SetTextColor(ar, ag, ab, 1)
-        panel.field.background:SetVertexColor(br, bg, bb, .94)
+        panel.field.background:SetVertexColor(br, bg, bb, addon.VignetteRadarMinimapUnderlay
+            and addon.VignetteRadarMinimapUnderlay.FaceAlpha() or .94)
         panel.field.halo:SetVertexColor(rr, rg, rb, .18 * db.vignetteRadarBorderOpacity)
         panel.squareBorder:SetVertexColor(rr, rg, rb, .12 * db.vignetteRadarBorderOpacity)
         local ringStrength = 2 * db.vignetteRadarRingOpacity * db.vignetteRadarRingOpacity
@@ -2700,8 +2759,14 @@ local function UpdateFullSweep(elapsed)
     local enabled = Settings().vignetteRadarFullSweep == true and panel:IsShown()
     if not enabled then
         for _, line in ipairs(panel.sweepLines) do line:Hide() end
+        panel._sweepDrawnAt = nil
         return
     end
+    -- OnUpdate advances the sweep right before Render asks again with zero.
+    local frameTime = Now()
+    if (elapsed or 0) == 0 and panel._sweepDrawnAt == frameTime
+        and panel._sweepDrawnRadius == panel.plotRadius then return end
+    panel._sweepDrawnAt, panel._sweepDrawnRadius = frameTime, panel.plotRadius
     panel._sweepAngle = ((panel._sweepAngle or 0) + (elapsed or 0) * .72) % TWO_PI
     for index, line in ipairs(panel.sweepLines) do
         local angle = panel._sweepAngle - ((index - 1) * .13)
@@ -2793,6 +2858,11 @@ RefreshTrailPopup = function()
     addon.VignetteRadarControls.RefreshPopupSurface(trailPopup)
     trailPopup.title:SetTextColor(ar, ag, ab, 1)
     trailPopup.rule:SetColorTexture(ar, ag, ab, .18)
+    local trailMode = Settings().vignetteRadarTrailMode or "off"
+    for _, button in ipairs(trailPopup.modeButtons or {}) do
+        button._selected = button.mode == trailMode
+        button:RefreshAppearance()
+    end
     trailPopup.close.label:SetTextColor(ar, ag, ab, trailPopup.close._hovered and 1 or .7)
     trailPopup.close.glow:SetVertexColor(ar, ag, ab, trailPopup.close._hovered and .18 or 0)
     trailPopup.scrollTrack:SetColorTexture(ar, ag, ab, .13)
@@ -2894,7 +2964,7 @@ end
 local function EnsureTrailPopup()
     if trailPopup then return trailPopup end
     trailPopup = CreateFrame("Frame", "VignetteRadarTrailStylePopup", UIParent, "BackdropTemplate")
-    trailPopup:SetSize(244, 360)
+    trailPopup:SetSize(244, 388)
     trailPopup:SetFrameStrata("DIALOG")
     trailPopup:SetClampedToScreen(true)
     trailPopup:EnableMouse(true)
@@ -2906,6 +2976,20 @@ local function EnsureTrailPopup()
     trailPopup.rule:SetPoint("TOPLEFT", 9, -28)
     trailPopup.rule:SetPoint("TOPRIGHT", -9, -28)
     trailPopup.rule:SetHeight(1)
+    -- Trails mode (Off / Follow / Lead / Both), the same setting as Radar >
+    -- Exploring > Trails: Follow draws where you have been, Lead the way
+    -- ahead to your target and next stops.
+    trailPopup.modeButtons = {}
+    for _, choice in ipairs({ { "off", "Off" }, { "follow", "Follow" }, { "lead", "Lead" }, { "both", "Both" } }) do
+        local button = addon.VignetteRadarControls.Button(trailPopup, choice[2], 50, 21)
+        button.mode = choice[1]
+        button:SetScript("OnClick", function(self)
+            addon.SetVignetteRadarTrailMode(self.mode)
+            RefreshTrailPopup()
+        end)
+        trailPopup.modeButtons[#trailPopup.modeButtons + 1] = button
+    end
+    addon.VignetteRadarControls.FlowButtons(trailPopup, trailPopup.modeButtons, 10, -34, 224, 4, 21)
     trailPopup.close = CreateFrame("Button", nil, trailPopup)
     trailPopup.close:SetSize(18, 18)
     trailPopup.close:SetPoint("TOPRIGHT", -6, -5)
@@ -2927,7 +3011,7 @@ local function EnsureTrailPopup()
     end)
     trailPopup.scroll = CreateFrame("ScrollFrame", nil, trailPopup)
     trailPopup.scroll:SetSize(208, 135)
-    trailPopup.scroll:SetPoint("TOPLEFT", trailPopup, "TOPLEFT", 8, -34)
+    trailPopup.scroll:SetPoint("TOPLEFT", trailPopup, "TOPLEFT", 8, -62)
     trailPopup.scroll:EnableMouseWheel(true)
     trailPopup.content = CreateFrame("Frame", nil, trailPopup.scroll)
     trailPopup.content:SetSize(208, #TRAIL_STYLES * 27)
@@ -2935,7 +3019,7 @@ local function EnsureTrailPopup()
     trailPopup.scrollIndex = 0
     trailPopup.scrollTrack = trailPopup:CreateTexture(nil, "ARTWORK")
     trailPopup.scrollTrack:SetSize(3, 99)
-    trailPopup.scrollTrack:SetPoint("TOPLEFT", trailPopup, "TOPLEFT", 228, -52)
+    trailPopup.scrollTrack:SetPoint("TOPLEFT", trailPopup, "TOPLEFT", 228, -80)
     trailPopup.scrollThumb = trailPopup:CreateTexture(nil, "OVERLAY")
     trailPopup.scrollThumb:SetSize(3, math.max(24, math.floor(99 * 5 / #TRAIL_STYLES + .5)))
     trailPopup.rows = {}
@@ -3004,7 +3088,7 @@ local function EnsureTrailPopup()
     end)
     trailPopup.scrollGrip = CreateFrame("Button", nil, trailPopup)
     trailPopup.scrollGrip:SetSize(16, 99)
-    trailPopup.scrollGrip:SetPoint("TOPLEFT", trailPopup, "TOPLEFT", 221, -52)
+    trailPopup.scrollGrip:SetPoint("TOPLEFT", trailPopup, "TOPLEFT", 221, -80)
     trailPopup.scrollGrip:RegisterForDrag("LeftButton")
     local function ScrollAtCursor()
         if type(GetCursorPosition) ~= "function" then return end
@@ -3027,8 +3111,8 @@ local function EnsureTrailPopup()
         if self._dragging then ScrollAtCursor() end
     end)
     trailPopup.rule2 = trailPopup:CreateTexture(nil, "ARTWORK")
-    trailPopup.rule2:SetPoint("TOPLEFT", trailPopup, "TOPLEFT", 9, -177)
-    trailPopup.rule2:SetPoint("TOPRIGHT", trailPopup, "TOPRIGHT", -9, -177)
+    trailPopup.rule2:SetPoint("TOPLEFT", trailPopup, "TOPLEFT", 9, -205)
+    trailPopup.rule2:SetPoint("TOPRIGHT", trailPopup, "TOPRIGHT", -9, -205)
     trailPopup.rule2:SetHeight(1)
     trailPopup.rule2:SetColorTexture(.5, .7, .7, .16)
     trailPopup.controls = {}
@@ -3047,7 +3131,7 @@ local function EnsureTrailPopup()
             format=function(value) return math.floor(value * 100 + .5) .. "%" end },
     }
     for index, definition in ipairs(controlDefinitions) do
-        local y = -184 - (index - 1) * 27
+        local y = -212 - (index - 1) * 27
         local control = { key=definition.key, values=definition.values, format=definition.format,
             min=definition.min, max=definition.max, step=definition.step }
         control.label = Text(trailPopup, 10, definition.label)
@@ -3055,9 +3139,7 @@ local function EnsureTrailPopup()
         if control.key == "vignetteRadarTrailLifetime" or control.min then
             control.value = CreateFrame("EditBox", nil, trailPopup, "BackdropTemplate")
             Surface(control.value)
-            local font = EllesmereUI and (EllesmereUI.EXPRESSWAY or EllesmereUI._font)
-                or STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
-            control.value:SetFont(font, 10, "")
+            addon.VignetteRadarStyle.SetFont(control.value, 10, "")
             control.value:SetAutoFocus(false)
             control.value:SetMaxLetters(3)
             control.value:SetTextInsets(2, 2, 0, 0)
@@ -3320,13 +3402,17 @@ function routeMenu.Note(label, message, objective)
     toast:Show()
 end
 
+-- Route notes show in the Guide Panel while it is up (its notice block),
+-- else as the toast under the radar.
 function addon.ShowVignetteRadarRouteNote(label, message, objective)
+    local guidance = addon.VignetteRadarGuidance
+    if guidance and guidance.Notice(label, message, objective) then return end
     routeMenu.Note(label, message, objective)
 end
 
 function routeMenu.CategoryButton(parent, kind, label, width)
     local button = addon.VignetteRadarControls.Button(parent, label, width, 42)
-    button.label:SetFont(STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", 9, "")
+    addon.VignetteRadarStyle.SetFont(button.label, 9, "")
     button.icon = button:CreateTexture(nil, "OVERLAY")
     button.icon:SetSize(19, 19)
     button.icon:SetPoint("TOP", button, "TOP", 0, -5)
@@ -3337,9 +3423,9 @@ function routeMenu.CategoryButton(parent, kind, label, width)
     elseif kind == "quest" then
         button.icon:SetTexture(addon.VignetteRadarQuestHollowTexture)
     elseif kind == "closest" then
-        button.icon:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\route-crystal-pointer.tga")
+        button.icon:SetTexture("Interface\\AddOns\\Magpie\\Media\\route-crystal-pointer.tga")
     else
-        button.icon:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\radar-corner-controls.tga")
+        button.icon:SetTexture("Interface\\AddOns\\Magpie\\Media\\radar-corner-controls.tga")
     end
     addon.VignetteRadarControls.RoundedStatusSurface(button)
     button.face:Hide()
@@ -3357,7 +3443,6 @@ function routeMenu.CategoryButton(parent, kind, label, width)
         local paused = self._routeState == "paused" or self._routeState == "waiting"
         self.label:ClearAllPoints()
         self.label:SetPoint("BOTTOM", self, "BOTTOM", 0, 5)
-        self.label:SetSize(width - 2, 11)
         self.label:SetTextColor(selected and (r + 1) / 2 or .77,
             selected and (g + 1) / 2 or .84, selected and (b + 1) / 2 or .85, 1)
         self.selection:Hide()
@@ -3463,7 +3548,7 @@ end
 function routeMenu.Ensure()
     if routeMenu.popup then return routeMenu.popup end
     routeMenu.popup = CreateFrame("Frame", "VignetteRadarRouteChooserPopup", UIParent, "BackdropTemplate")
-    routeMenu.popup:SetSize(248, 263)
+    routeMenu.popup:SetSize(326, 263)
     routeMenu.popup:SetFrameStrata("DIALOG")
     routeMenu.popup:SetClampedToScreen(true)
     routeMenu.popup:EnableMouse(true)
@@ -3471,7 +3556,8 @@ function routeMenu.Ensure()
     addon.VignetteRadarControls.PopupSurface(routeMenu.popup)
     routeMenu.popup.title = Text(routeMenu.popup, 10, "ROUTE CHOOSER", true)
     routeMenu.popup.title:SetPoint("TOPLEFT", 13, -10)
-    routeMenu.popup.close = addon.VignetteRadarControls.Button(routeMenu.popup, "×", 20, 20)
+    routeMenu.popup.close = addon.VignetteRadarIconButton.Create(routeMenu.popup, "close",
+        { size = 20, label = "Close Route Chooser" })
     routeMenu.popup.close:SetPoint("TOPRIGHT", routeMenu.popup, "TOPRIGHT", -9, -5)
     routeMenu.popup.close:SetScript("OnClick", routeMenu.Hide)
     routeMenu.popup.rule = routeMenu.popup:CreateTexture(nil, "ARTWORK")
@@ -3480,7 +3566,7 @@ function routeMenu.Ensure()
     routeMenu.popup.rule:SetHeight(1)
     routeMenu.popup.status = Text(routeMenu.popup, 9, "")
     routeMenu.popup.status:SetPoint("TOPLEFT", 13, -39)
-    routeMenu.popup.status:SetWidth(222)
+    routeMenu.popup.status:SetWidth(300)
     if routeMenu.popup.status.SetMaxLines then routeMenu.popup.status:SetMaxLines(1) end
     routeMenu.popup.section = Text(routeMenu.popup, 9, "CHOOSE A ROUTE", true)
     routeMenu.popup.section:SetPoint("TOPLEFT", 13, -61)
@@ -3513,14 +3599,14 @@ function routeMenu.Ensure()
         return button
     end
     for index, kind in ipairs({ "closest", "rare", "treasure", "quest" }) do
-        Choice(kind, kind:sub(1, 1):upper() .. kind:sub(2), 12 + (index - 1) * 45,
-            -77, 42, function()
+        Choice(kind, kind:sub(1, 1):upper() .. kind:sub(2), 12 + (index - 1) * 61,
+            -77, 58, function()
                 local focus = addon.VignetteRadarWorldFocus
                 if focus then return focus.StartNearest(kind) end
                 return false, "World Focus is unavailable"
             end, true)
     end
-    Choice("zygor", "Zygor", 192, -77, 42, function()
+    Choice("zygor", "Zygor", 256, -77, 58, function()
         local ok, reason = addon.VignetteRadarAPI.StartZygorRoute()
         routeMenu.ShowZygorPage()
         if not ok then
@@ -3529,32 +3615,33 @@ function routeMenu.Ensure()
         end
         return "page"
     end, true)
-    Choice("previous", "Previous Point", 13, -137, 107, function()
+    Choice("previous", "Previous Point", 13, -137, 146, function()
         local focus = addon.VignetteRadarWorldFocus
         if focus.IsQuestRoute() then return focus.PreviousQuestStep() end
         return focus.Cycle(-1)
     end)
-    Choice("next", "Next Point", 128, -137, 107, function()
+    Choice("next", "Next Point", 167, -137, 146, function()
         local focus = addon.VignetteRadarWorldFocus
         if focus.IsQuestRoute() then return focus.NextQuestStep() end
         return focus.Cycle(1)
     end)
-    routeMenu.popup.pause = Choice("pause", "Resume Auto Route", 13, -165, 107, function()
+    routeMenu.popup.pause = Choice("pause", "Resume Auto Route", 13, -165, 146, function()
         local focus = addon.VignetteRadarWorldFocus
         local wasRouting = focus.IsRouteActive()
         local ok, reason = focus.ToggleRoute()
         return wasRouting or ok, wasRouting and nil or reason
     end)
-    routeMenu.popup.skip = Choice("skip", "Skip Stop", 128, -165, 107, function()
+    routeMenu.popup.skip = Choice("skip", "Skip Stop", 167, -165, 146, function()
         return addon.VignetteRadarWorldFocus.SkipRouteStop()
     end)
-    routeMenu.popup.skipQuest = Choice("skipQuest", "Skip Quest", 13, -193, 107, function()
+    routeMenu.popup.skipQuest = Choice("skipQuest", "Skip Quest", 13, -193, 146, function()
         return addon.VignetteRadarWorldFocus.SkipQuest()
     end)
-    routeMenu.popup.clear = Choice("clear", "Clear Focus", 128, -193, 107, function()
+    routeMenu.popup.clear = Choice("clear", "Clear Focus", 167, -193, 146, function()
+        addon.VignetteRadarFocus.Clear({ project = false, source = "route" })
         return addon.VignetteRadarWorldFocus.Clear()
     end)
-    Choice("settings", "Route Settings", 13, -221, 222, function()
+    Choice("settings", "Route Settings", 13, -221, 300, function()
         local quick = addon.VignetteRadarQuickConfig
         if quick and quick.OpenPage then quick.OpenPage("Auto Route", CircleOnly() and panel.field or panel) end
         return true
@@ -3566,12 +3653,12 @@ function routeMenu.Ensure()
     end
     local zygor = CreateFrame("Frame", nil, routeMenu.popup)
     zygor:SetPoint("TOPLEFT", routeMenu.popup, "TOPLEFT", 0, -32)
-    zygor:SetSize(248, 258)
+    zygor:SetSize(326, 258)
     zygor:EnableMouseWheel(true)
     routeMenu.popup.zygor = zygor
     zygor.status = Text(zygor, 9, "")
     zygor.status:SetPoint("TOPLEFT", 13, -4)
-    zygor.status:SetWidth(222)
+    zygor.status:SetWidth(300)
     if zygor.status.SetMaxLines then zygor.status:SetMaxLines(1) end
     zygor.section = Text(zygor, 9, "PIN A LOCATION", true)
     zygor.section:SetPoint("TOPLEFT", 13, -27)
@@ -3592,7 +3679,7 @@ function routeMenu.Ensure()
         end)
         return button
     end
-    zygor.objective = ZygorButton("Selected Objective", 13, -45, 107, function()
+    zygor.objective = ZygorButton("Selected Objective", 13, -45, 146, function()
         local ready, reason = addon.VignetteRadarAPI.BindZygorGuide()
         if not ready then return false, reason end
         local bridge = addon.VignetteRadarZygor
@@ -3600,7 +3687,7 @@ function routeMenu.Ensure()
         bridge.SetMode("objective")
         return bridge.Pin("objective")
     end)
-    zygor.travel = ZygorButton("Next Travel Stop", 128, -45, 107, function()
+    zygor.travel = ZygorButton("Next Travel Stop", 167, -45, 146, function()
         local ready, reason = addon.VignetteRadarAPI.BindZygorGuide()
         if not ready then return false, reason end
         local bridge = addon.VignetteRadarZygor
@@ -3608,7 +3695,7 @@ function routeMenu.Ensure()
         bridge.SetMode("travel")
         return bridge.Pin("travel")
     end)
-    zygor.follow = ZygorButton("Follow Guide", 13, -73, 222, function()
+    zygor.follow = ZygorButton("Follow Guide", 13, -73, 300, function()
         local ready, reason = addon.VignetteRadarAPI.BindZygorGuide()
         if not ready then return false, reason end
         local ok, reason = addon.VignetteRadarZygor.ToggleFollow()
@@ -3618,7 +3705,7 @@ function routeMenu.Ensure()
     zygor.goalTitle:SetPoint("TOPLEFT", 13, -106)
     zygor.rows = {}
     for index = 1, 4 do
-        local row = ZygorButton("", 13, -124 - (index - 1) * 24, 210, function(self)
+        local row = ZygorButton("", 13, -124 - (index - 1) * 24, 288, function(self)
             local ready, reason = addon.VignetteRadarAPI.BindZygorGuide()
             if not ready then return false, reason end
             return addon.VignetteRadarZygor.Pin("objective", self.goalIndex)
@@ -3636,7 +3723,7 @@ function routeMenu.Ensure()
     end
     zygor.scrollTrack = zygor:CreateTexture(nil, "ARTWORK")
     zygor.scrollTrack:SetColorTexture(.45, .55, .57, .28)
-    zygor.scrollTrack:SetPoint("TOPLEFT", zygor, "TOPLEFT", 230, -124)
+    zygor.scrollTrack:SetPoint("TOPLEFT", zygor, "TOPLEFT", 308, -124)
     zygor.scrollTrack:SetSize(3, 94)
     zygor.scrollThumb = zygor:CreateTexture(nil, "OVERLAY")
     zygor.scrollThumb:SetColorTexture(.65, .8, .82, .85)
@@ -3756,7 +3843,8 @@ function routeMenu.ShowGuideStrip(anchor)
         strip.detail:SetHeight(27)
         strip.detail:SetWordWrap(true)
         if strip.detail.SetMaxLines then strip.detail:SetMaxLines(2) end
-        strip.action = addon.VignetteRadarControls.Button(strip, "Follow", 58, 20)
+        strip.action = addon.VignetteRadarIconButton.Create(strip, "follow",
+            { size = 20, label = "Follow Guide" })
         strip.action:SetPoint("TOPRIGHT", strip, "TOPRIGHT", -9, -7)
         strip.action:SetScript("OnClick", function()
             bridge.ToggleFollow()
@@ -3782,8 +3870,10 @@ function routeMenu.ShowGuideStrip(anchor)
     local focus = addon.VignetteRadarWorldFocus
     strip.detail:SetText(focus and focus.OwnsGuideWaypoint()
         and focus.Status() or bridge.Status())
-    strip.action:SetText(bridge.IsPaused() and "Resume"
-        or bridge.IsFollowing() and "Pause" or "Follow")
+    -- Pause while following; Follow (or Resume when paused) otherwise.
+    strip.action:SetIcon(bridge.IsFollowing() and not bridge.IsPaused() and "pause" or "follow")
+    strip.action:SetLabel(bridge.IsPaused() and "Resume Guide"
+        or bridge.IsFollowing() and "Pause Guide" or "Follow Guide")
     strip:ClearAllPoints()
     local top = anchor.GetTop and anchor:GetTop()
     if top and top < strip:GetHeight() + 12 then
@@ -4144,8 +4234,8 @@ Render = function()
             panel.RefreshCornerTools()
         end
     end
-    if panel.arrowToggle and panel.arrowToggle._selected ~= Settings().vignetteRadarRouteArrow then
-        panel.arrowToggle._selected = Settings().vignetteRadarRouteArrow == true
+    if panel.arrowToggle and panel.arrowToggle._selected ~= Settings().vignetteRadarGuidePanel then
+        panel.arrowToggle._selected = Settings().vignetteRadarGuidePanel == true
         panel.arrowToggle:RefreshAppearance()
     end
     UpdateFullSweep(0)
@@ -4165,6 +4255,33 @@ Render = function()
     if contextOverlay and type(contextOverlay.range) == "number"
         and not preview and not focusedTarget then
         range = contextOverlay.range
+    end
+    -- Minimap Underlay: zooms and sizes the borrowed Minimap to this range.
+    if addon.VignetteRadarMinimapUnderlay and not preview then
+        range = addon.VignetteRadarMinimapUnderlay.Sync(range, panel) or range
+    end
+    -- While the minimap terrain fills the face, the range rings and their
+    -- yard labels step aside; the face outline stays.
+    local terrain = not preview and addon.VignetteRadarMinimapUnderlay ~= nil
+        and addon.VignetteRadarMinimapUnderlay.ShowsTerrain() or false
+    if panel._ringsHidden ~= terrain then
+        panel._ringsHidden = terrain
+        for _, ring in ipairs({ panel.rangeRing, panel.middleRing, panel.innerRing }) do
+            for _, line in ipairs(ring) do line:SetShown(not terrain) end
+        end
+        panel.innerLabel:SetShown(not terrain)
+        panel.outerLabel:SetShown(not terrain)
+        if addon.Trace then addon.Trace.Log("minimap", "range rings %s", terrain and "hidden" or "shown") end
+    end
+    -- Duplicate Icons: the marker kinds the radar leaves to the minimap this
+    -- render (UI/MinimapUnderlay.lua RadarHides), one cached table or nil.
+    panel._underlayHide = terrain and addon.VignetteRadarMinimapUnderlay.RadarHides() or nil
+    if panel._underlayHideTraced ~= panel._underlayHide then
+        panel._underlayHideTraced = panel._underlayHide
+        if addon.Trace then
+            addon.Trace.Log("minimap", "radar markers: %s",
+                panel._underlayHide and panel._underlayHide.label or "all shown")
+        end
     end
     displayedRange = range
     UpdateRingLabels(range)
@@ -4358,6 +4475,8 @@ Render = function()
     local groups = {}
     for _, target in ipairs(targets) do
         if TargetVisible(target)
+            -- Duplicate Icons: live vignettes the minimap already draws (last-seen ones stay).
+            and not (panel._underlayHide and panel._underlayHide.vignettes and not target.stale)
             and not (player.instanceID and target.instanceID and player.instanceID ~= target.instanceID) then
             local dx, dy = target.worldX - player.worldX, target.worldY - player.worldY
             local distance = math.sqrt((dx * dx) + (dy * dy))
@@ -4681,10 +4800,10 @@ function Morph.Start(opening, fromX, fromY, fromWidth, fromHeight,
         Morph.shell.border:SetTexture(ROUNDED_BORDER_TEXTURE)
         Morph.shell.launcherFace = Morph.shell:CreateTexture(nil, "BACKGROUND", nil, 1)
         Morph.shell.launcherFace:SetAllPoints()
-        Morph.shell.launcherFace:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\launcher-housing.tga")
+        Morph.shell.launcherFace:SetTexture("Interface\\AddOns\\Magpie\\Media\\launcher-housing.tga")
         Morph.shell.launcherBorder = Morph.shell:CreateTexture(nil, "OVERLAY", nil, 1)
         Morph.shell.launcherBorder:SetAllPoints()
-        Morph.shell.launcherBorder:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\launcher-outline.tga")
+        Morph.shell.launcherBorder:SetTexture("Interface\\AddOns\\Magpie\\Media\\launcher-outline.tga")
     end
     local morphShell = Morph.shell
     local style = addon.VignetteRadarStyle
@@ -4766,7 +4885,7 @@ end
 local function LauncherTooltip(owner)
     if not GameTooltip then return end
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-    GameTooltip:SetText("Vignette Radar", 1, 1, 1)
+    GameTooltip:SetText("Magpie", 1, 1, 1)
     GameTooltip:AddLine((Settings().vignetteRadarEnabled == true or preview)
         and "This mini radar shows live detections within 150 yards."
         or "Tracking is off. Click to reopen the radar and resume detection.",
@@ -4993,7 +5112,7 @@ EnsureLauncher = function()
     launcher.face = launcher:CreateTexture(nil, "BORDER")
     launcher.face:SetSize(LAUNCHER_DIMENSIONS.width, LAUNCHER_DIMENSIONS.height)
     launcher.face:SetPoint("CENTER")
-    launcher.face:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\launcher-housing.tga")
+    launcher.face:SetTexture("Interface\\AddOns\\Magpie\\Media\\launcher-housing.tga")
     launcher.face:SetVertexColor(0.012, 0.046, 0.052, 0.98)
     launcher.instrument = CreateFrame("Frame", nil, launcher)
     launcher.instrument:SetSize(56, 56)
@@ -5078,17 +5197,17 @@ EnsureLauncher = function()
     end
     launcher.chrome = launcher:CreateTexture(nil, "OVERLAY", nil, 2)
     launcher.chrome:SetAllPoints()
-    launcher.chrome:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\launcher-outline.tga")
+    launcher.chrome:SetTexture("Interface\\AddOns\\Magpie\\Media\\launcher-outline.tga")
     launcher.chrome:SetVertexColor(.46, .48, .52, .26)
     launcher.bezel = launcher:CreateTexture(nil, "OVERLAY", nil, 3)
     launcher.bezel:SetSize(LAUNCHER_DIMENSIONS.width, LAUNCHER_DIMENSIONS.height)
     launcher.bezel:SetPoint("CENTER")
-    launcher.bezel:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\launcher-outline.tga")
+    launcher.bezel:SetTexture("Interface\\AddOns\\Magpie\\Media\\launcher-outline.tga")
     launcher.bezel:SetAlpha(0.92)
     launcher.closed = launcher:CreateTexture(nil, "OVERLAY", nil, 3)
     launcher.closed:SetSize(LAUNCHER_DIMENSIONS.width, LAUNCHER_DIMENSIONS.height)
     launcher.closed:SetPoint("CENTER")
-    launcher.closed:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\launcher-outline.tga")
+    launcher.closed:SetTexture("Interface\\AddOns\\Magpie\\Media\\launcher-outline.tga")
     launcher.closed:SetAlpha(0.62)
     launcher.closed:Hide()
     launcher.facets = {}
@@ -5136,7 +5255,8 @@ EnsureLauncher = function()
         self._shock = 0.001
         PlayLauncherSound()
         if button == "RightButton" then
-            if IsShiftKeyDown and IsShiftKeyDown() then
+            if IsShiftKeyDown and IsShiftKeyDown()
+                and Settings().vignetteRadarAdvancedTools == true then
                 addon.VignetteRadarAPI.ToggleAtlas()
             else
                 preview = not preview
@@ -5238,7 +5358,7 @@ local function EnsurePanel()
         type(position) == "table" and tonumber(position.x) or 30,
         type(position) == "table" and tonumber(position.y) or -520)
 
-    panel.title = Text(panel, 11, "VIGNETTE RADAR", true)
+    panel.title = Text(panel, 11, "MAGPIE", true)
     panel.title:SetPoint("TOPLEFT", 12, -6)
     panel.title:SetWidth(100)
     panel.summary = Text(panel, 8, "0 IN RANGE")
@@ -5267,9 +5387,10 @@ local function EnsurePanel()
     panel.emptyHelp:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     panel.emptyHelp:Hide()
 
-    panel.layoutHint = Text(panel, 10, "Nothing detected here yet.")
+    panel.layoutHint = Text(panel, 9, "Nothing detected here yet.")
     panel.layoutHint:SetPoint("TOPLEFT", 214, -76)
     panel.layoutHint:SetSize(148, 40)
+    panel.layoutHint:SetWordWrap(true)
     panel.layoutHint:SetTextColor(0.65, 0.69, 0.71, 1)
     panel.layoutHint:Hide()
     panel.sideCaption = Text(panel, 8, "NEAREST DETECTION", true)
@@ -5726,8 +5847,8 @@ local function EnsurePanel()
     panel.focusCard.detail = Text(panel.focusCard, 9, "")
     panel.focusCard.detail:SetPoint("TOPLEFT", 12, -32)
     panel.focusCard.detail:SetWidth(161)
-    panel.focusCard.showAll = addon.VignetteRadarControls.Button(panel.focusCard,
-        "Show All", 76, 20)
+    panel.focusCard.showAll = addon.VignetteRadarIconButton.Create(panel.focusCard, "eye",
+        { size = 20, label = "Show All", tooltip = "Clear the focus and show every point again." })
     panel.focusCard.showAll:SetPoint("BOTTOMRIGHT", -9, 6)
     panel.focusCard.showAll:SetScript("OnClick", function()
         local picker = TargetPickerAPI()
@@ -5768,14 +5889,14 @@ local function EnsurePanel()
         elseif symbol == "route" then
             button.glow:Hide()
             button.art = button:CreateTexture(nil, "OVERLAY")
-            button.art:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\radar-corner-controls.tga")
+            button.art:SetTexture("Interface\\AddOns\\Magpie\\Media\\radar-corner-controls.tga")
             button.art:SetSize(22, 22)
             button.art:SetPoint("CENTER")
         elseif symbol == "arrow" then
             button.glow:Hide()
             button._directArt = true
             button.art = button:CreateTexture(nil, "OVERLAY")
-            button.art:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\route-crystal-pointer.tga")
+            button.art:SetTexture("Interface\\AddOns\\Magpie\\Media\\route-crystal-pointer.tga")
             button.art:SetSize(16, 16)
             button.art:SetPoint("CENTER")
         elseif symbol == "trail" then
@@ -5909,22 +6030,26 @@ local function EnsurePanel()
     routeMenu.SetupButtons(panel, ToolbarIcon)
     panel.arrowToggle = ToolbarIcon("arrow", 18)
     panel.arrowToggle:SetScript("OnClick", function(self)
-        Settings().vignetteRadarRouteArrow = Settings().vignetteRadarRouteArrow ~= true
-        self._selected = Settings().vignetteRadarRouteArrow
+        -- The Guide Panel switch (Core/Schema.lua writes, validates and refreshes it).
+        local wanted = Settings().vignetteRadarGuidePanel ~= true
+        if addon.Schema then addon.Schema.Set("vignetteRadarGuidePanel", wanted)
+        else Settings().vignetteRadarGuidePanel = wanted; addon.InvalidateSettings() end
+        self._selected = Settings().vignetteRadarGuidePanel
         self:RefreshAppearance()
-        if addon.VignetteRadarRouteArrow then addon.VignetteRadarRouteArrow.Refresh() end
+        if addon.VignetteRadarGuidePanel then addon.VignetteRadarGuidePanel.Refresh() end
         if addon.VignetteRadarQuickConfig then addon.VignetteRadarQuickConfig.Refresh() end
         if panel.RefreshCornerTools then panel.RefreshCornerTools() end
     end)
     panel.arrowToggle:HookScript("OnEnter", function(self)
         if not GameTooltip then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Mini Route Arrow: " .. (Settings().vignetteRadarRouteArrow and "On" or "Off"), 1, 1, 1)
-        GameTooltip:AddLine("Show or hide the movable arrow while an Auto Route has a destination.", .7, .8, .8, true)
+        GameTooltip:SetText("Guide Panel: " .. (Settings().vignetteRadarGuidePanel and "On" or "Off"), 1, 1, 1)
+        GameTooltip:AddLine("Show or hide the panel with your target's direction, distance, next stops and what to do there.",
+            .7, .8, .8, true)
         GameTooltip:Show()
     end)
     panel.arrowToggle:HookScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
-    panel.arrowToggle._selected = Settings().vignetteRadarRouteArrow == true
+    panel.arrowToggle._selected = Settings().vignetteRadarGuidePanel == true
     panel.arrowToggle:RefreshAppearance()
 
     panel.combatToggle = CreateFrame("Button", nil, panel)
@@ -5986,12 +6111,13 @@ local function EnsurePanel()
         for _, tool in ipairs(panel.hoverTools) do
             local id = tool.toolID
             local active = id == "north" and settings.vignetteRadarNorthUp == true
+                or id == "constellation" and settings.vignetteRadarConstellationEnabled == true
                 or id == "tracker" and addon.VignetteRadarQuestTracker
                     and addon.VignetteRadarQuestTracker.IsExpanded()
                 or id == "trail" and settings.vignetteRadarBreadcrumbs == true
                 or id == "route" and addon.VignetteRadarWorldFocus
                     and addon.VignetteRadarWorldFocus.IsRouteActive()
-                or id == "arrow" and settings.vignetteRadarRouteArrow == true
+                or id == "arrow" and settings.vignetteRadarGuidePanel == true
                 or id == "clear" and settings.vignetteRadarKeepCenterClear == true
                 or id == "eye" and settings.vignetteRadarKeepVisibleCombat == true
                 or id == "player" and addon.VignetteRadarPlayerTracker
@@ -6002,7 +6128,10 @@ local function EnsurePanel()
                 or id == "legend" and legend and
                     ((legend.IsShown and legend.IsShown()) or (legend.IsQuestShown and legend.IsQuestShown()))
             local state = (active and 2 or 0) + (tool._hovered and 1 or 0)
-            if state ~= tool._artState then
+            -- Layered tools (UI/IconButton.lua) take each layer from its own icon role.
+            if tool.iconLayers then
+                addon.VignetteRadarIconButton.Paint(tool, active, tool._hovered)
+            elseif state ~= tool._artState then
                 local column = tool.artColumn
                 tool.art:SetTexCoord((column * 64 + 1) / 1024, (column * 64 + 63) / 1024,
                     (state * 64 + 1) / 256, (state * 64 + 63) / 256)
@@ -6017,14 +6146,14 @@ local function EnsurePanel()
                     end
                 end
                 tool.art:SetShown(trackedKind == nil)
-                tool.art:SetVertexColor(ACCENT[1], ACCENT[2], ACCENT[3], 1)
+                if not tool.iconLayers then tool.art:SetVertexColor(ACCENT[1], ACCENT[2], ACCENT[3], 1) end
                 tool.trackingIcon:SetShown(trackedKind ~= nil)
                 if trackedKind then
                     local r, g, b = routeMenu.TrackedRouteColor(trackedKind)
                     tool.trackingIcon:SetVertexColor(r, g, b, active and 1 or .75)
                 end
-            elseif tool._artRed ~= ACCENT[1] or tool._artGreen ~= ACCENT[2]
-                or tool._artBlue ~= ACCENT[3] then
+            elseif not tool.iconLayers and (tool._artRed ~= ACCENT[1] or tool._artGreen ~= ACCENT[2]
+                or tool._artBlue ~= ACCENT[3]) then
                 tool.art:SetVertexColor(ACCENT[1], ACCENT[2], ACCENT[3], 1)
                 tool._artRed, tool._artGreen, tool._artBlue = ACCENT[1], ACCENT[2], ACCENT[3]
             end
@@ -6042,14 +6171,20 @@ local function EnsurePanel()
             tool:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         end
         tool.toolID, tool.reference = id, reference
+        tool.advancedTool = id == "player"
         tool.artColumn = ({ config = 0, target = 1, legend = 2, minus = 3,
             plus = 4, north = 5, trail = 6, eye = 7, player = 8, close = 9,
             route = 10, tracker = 11, clear = 12, arrow = 13,
-            minimize = 14 })[id]
-        tool.art = tool:CreateTexture(nil, "ARTWORK")
-        tool.art:SetTexture("Interface\\AddOns\\VignetteRadar\\Media\\radar-corner-controls.tga")
-        tool.art:SetSize(18, 18)
-        tool.art:SetPoint("CENTER")
+            minimize = 14, constellation = 15 })[id]
+        local icons = addon.VignetteRadarIconButton
+        if icons and tool.artColumn and icons.HasIcon("corner_" .. id) then
+            icons.AddLayers(tool, "corner_" .. id, 18)
+        else
+            tool.art = tool:CreateTexture(nil, "ARTWORK")
+            tool.art:SetTexture("Interface\\AddOns\\Magpie\\Media\\radar-corner-controls.tga")
+            tool.art:SetSize(18, 18)
+            tool.art:SetPoint("CENTER")
+        end
         if id == "route" then
             tool.trackingIcon = tool:CreateTexture(nil, "OVERLAY")
             tool.trackingIcon:SetSize(18, 18)
@@ -6083,10 +6218,31 @@ local function EnsurePanel()
                 end
             end) end
         end)
+        -- A tool hidden under the cursor (corner fade, Button Tray sliding in)
+        -- must not keep its hover light.
+        tool:SetScript("OnHide", function(self)
+            if self._hovered then
+                self._hovered = false
+                panel.RefreshCornerTools()
+            end
+        end)
+        -- The tray treats its own toggle as a click inside, not a click away.
+        if (id == "tracker" or id == "legend") and addon.VignetteRadarTray then
+            addon.VignetteRadarTray.RegisterToggle(tool)
+        end
         tool:SetScript("OnClick", function(self, button)
             if id == "tracker" then
                 local tracker = addon.VignetteRadarQuestTracker
                 if tracker then tracker.ToggleTray() end
+                panel.RefreshCornerTools()
+                return
+            end
+            if id == "constellation" then
+                local constellation = addon.VignetteRadarConstellation
+                if constellation then
+                    if button == "RightButton" then constellation.ToggleMenu(self)
+                    else constellation.Toggle() end
+                end
                 panel.RefreshCornerTools()
                 return
             end
@@ -6124,6 +6280,8 @@ local function EnsurePanel()
     HoverTool("minus", "Zoom Out", panel.zoomOut, "TOPRIGHT", -12, -12)
     HoverTool("plus", "Zoom In", panel.zoomIn, "TOPRIGHT", -32, -12)
     HoverTool("north", "North Up / Facing Up", panel.compass, "TOPRIGHT", -12, -32)
+    HoverTool("constellation", "Constellation HUD · Right-Click For Views",
+        nil, "TOPRIGHT", -32, -32)
     HoverTool("eye", "Stay Fully Visible", panel.combatToggle, "BOTTOMLEFT", 12, 12)
     HoverTool("clear", "Keep Center Clear", panel.clearToggle, "BOTTOMLEFT", 32, 12)
     HoverTool("trail", "Trail · Left-Click To Toggle, Right-Click For Style",
@@ -6149,8 +6307,18 @@ local function EnsurePanel()
     end
     HoverTool("minimize", "Minimize To Launcher", panel.minimize,
         "BOTTOMRIGHT", -32, 12)
-    HoverTool("close", "Turn Radar Off", panel.close, "BOTTOMRIGHT", -12, 12)
+    -- The bottom-right outer slot belongs to the Minimap Underlay toggle
+    -- (UI/MinimapUnderlay.lua); Minimize, /vr and the keybind turn the radar off.
     panel.RefreshCornerTools()
+    -- A switch flipped from the settings window (North Up, Trail, Guide
+    -- Panel, ...) repaints the tools' selected state right away, also for
+    -- entries that skip the radar refresh. Paint is cached, so this is cheap.
+    if addon.Schema and addon.Schema.OnChange and not panel._cornerToolsListening then
+        panel._cornerToolsListening = true
+        addon.Schema.OnChange(function()
+            if panel.RefreshCornerTools then panel.RefreshCornerTools() end
+        end)
+    end
     panel.field:SetScript("OnEnter", function()
         panel._hoverToolsShown = true
         UpdatePanelChrome()
@@ -6168,18 +6336,19 @@ local function EnsurePanel()
 
     panel:SetScript("OnUpdate", function(self, elapsed)
         local started = ProfileTime()
+        local settings = Settings()
         local turn = addon.VignetteRadarTurn
         self._turnElapsed = (self._turnElapsed or 0) + elapsed
         if self._turnElapsed >= turn.Interval(self, addon.VignetteRadarBudget
             and addon.VignetteRadarBudget.softThrottle) then
             local turnElapsed = self._turnElapsed
             self._turnElapsed = 0
-            if not preview and Settings().vignetteRadarEnabled
+            if not preview and settings.vignetteRadarEnabled
                 and type(GetPlayerFacing) == "function" then
                 local ok, facing = pcall(GetPlayerFacing)
                 facing = ok and SafeNumber(facing) or nil
                 if facing then
-                    if Settings().vignetteRadarNorthUp then
+                    if settings.vignetteRadarNorthUp then
                         local tip, outer = HeadingGeometry(self.plotRadius)
                         DrawPlayerHeading(self.direction, self.field, facing, tip, outer)
                         DrawPlayerChevron(self.headingChevron, self.field, facing)
@@ -6190,7 +6359,6 @@ local function EnsurePanel()
         end
         self._renderElapsed = (self._renderElapsed or 0) + elapsed
         self._scanElapsed = (self._scanElapsed or 0) + elapsed
-        local settings = Settings()
         if not preview and settings.vignetteRadarEnabled == true
             and settings.vignetteRadarBreadcrumbs == true
             and settings.vignetteRadarTrailLifetime <= 5 and activeMapID
@@ -6214,7 +6382,7 @@ local function EnsurePanel()
                 UpdateQuestAreaTooltip()
             end
         end
-        if self._scanElapsed >= addon.VignetteRadarScanSeconds() then
+        if self._scanElapsed >= addon.VignetteRadarScanSeconds(settings) then
             self._scanElapsed = 0
             RefreshRadar(true)
             if not self:IsShown() then
@@ -6222,7 +6390,7 @@ local function EnsurePanel()
                 return
             end
         end
-        if self._renderElapsed >= addon.VignetteRadarRenderSeconds() then
+        if self._renderElapsed >= addon.VignetteRadarRenderSeconds(settings) then
             local renderElapsed = self._renderElapsed
             self._renderElapsed = 0
             local layerBudget = addon.VignetteRadarLayerBudget
@@ -6316,24 +6484,26 @@ addon.UpdateAtlasSnapshot = function(mapID, now, changedMap)
         or (not changedMap and addon._radarAtlasUpdatedAt
             and now - addon._radarAtlasUpdatedAt < 2) then return end
     local entries = {}
-    for index = 1, math.min(#activeTargets, 128) do
-        local target = activeTargets[index]
+    local points = addon.VignetteRadarPoints
+    local targets, quests, notes = points.Refs("live"), points.Refs("quest"), points.Refs("saved")
+    for index = 1, math.min(#targets, 128) do
+        local target = targets[index]
         entries[#entries + 1] = {
             name = target.name, mapID = target.mapID, mapX = target.mapX,
             mapY = target.mapY, kind = target.category,
             evidence = target.stale and "observed" or "live", targetRef = target,
         }
     end
-    for index = 1, math.min(#activeQuests, 128) do
-        local quest = activeQuests[index]
+    for index = 1, math.min(#quests, 128) do
+        local quest = quests[index]
         entries[#entries + 1] = {
             name = quest.name, mapID = quest.mapID, mapX = quest.mapX,
             mapY = quest.mapY, kind = "quest", questID = quest.questID,
             evidence = "quest",
         }
     end
-    for index = 1, math.min(#activeMapNotes, 256) do
-        local note = activeMapNotes[index]
+    for index = 1, math.min(#notes, 256) do
+        local note = notes[index]
         entries[#entries + 1] = {
             name = note.name, mapID = note.mapID, mapX = note.mapX,
             mapY = note.mapY, kind = note.kind, evidence = "saved", noteRef = note,
@@ -6346,14 +6516,17 @@ end
 ScanVignettes = function(mapID)
     local changedMap = activeMapID ~= mapID
     local now = Now()
+    local db = Settings()
+    -- One position read serves every consumer in this scan; it is returned
+    -- so RefreshRadar can reuse it too.
+    local player = PlayerSnapshot(mapID)
     if changedMap then questMapBasis = nil end
-    if activeMapID ~= mapID or preview or Settings().vignetteRadarEnabled ~= true then
+    if activeMapID ~= mapID or preview or db.vignetteRadarEnabled ~= true then
         pulseUntil, approachPulseKey, approachPulseUntil = 0, nil, nil
     end
     activeMapID = mapID
-    addon._rawVignetteTargets = CollectVignettes(mapID)
+    addon._rawVignetteTargets = CollectVignettes(mapID, player)
     activeTargets = addon._rawVignetteTargets
-    local db = Settings()
     local questCache = addon._focusQuestCache
     local questOptions = tostring(db.vignetteRadarNextQuestStep) .. ":"
         .. tostring(db.vignetteRadarQuestDots) .. ":" .. tostring(db.vignetteRadarQuestAreas)
@@ -6368,25 +6541,24 @@ ScanVignettes = function(mapID)
         addon._focusQuestCache = { quests = activeQuests, mapID = mapID,
             options = questOptions, at = now }
     end
-    local startsEnabled = Settings().vignetteRadarQuestStartBadges == true
-        or Settings().vignetteRadarAutoRouteQuestStarts == true
+    local startsEnabled = db.vignetteRadarQuestStartBadges == true
+        or db.vignetteRadarAutoRouteQuestStarts == true
     local startsNow = Now()
     local accountTracking = SafeBoolean(Call(C_Minimap and C_Minimap.IsTrackingAccountCompletedQuests))
     if addon.VignetteRadarStartsMapID ~= mapID
         or addon.VignetteRadarStartsEnabled ~= startsEnabled
-        or addon.VignetteRadarStartsBadges ~= Settings().vignetteRadarQuestStartBadges
+        or addon.VignetteRadarStartsBadges ~= db.vignetteRadarQuestStartBadges
         or addon.VignetteRadarStartsAccountTracking ~= accountTracking
         or not addon.VignetteRadarStartsNextAt
         or startsNow >= addon.VignetteRadarStartsNextAt then
         addon.VignetteRadarAvailableStarts = {}
         addon.VignetteRadarStartsMapID = mapID
         addon.VignetteRadarStartsEnabled = startsEnabled
-        addon.VignetteRadarStartsBadges = Settings().vignetteRadarQuestStartBadges
+        addon.VignetteRadarStartsBadges = db.vignetteRadarQuestStartBadges
         addon.VignetteRadarStartsAccountTracking = accountTracking
         addon.VignetteRadarStartsNextAt = startsNow + 5
         if mapID and startsEnabled and addon.VignetteRadarQuestData then
             local starts = addon.VignetteRadarQuestData.GetAvailableQuestStarts(mapID)
-            local player = PlayerSnapshot(mapID)
             for index = 1, math.min(80, #starts) do
                 local entry = starts[index]
                 local worldX, worldY, instanceID = MapToWorld(mapID, MapVector(entry.x, entry.y))
@@ -6406,10 +6578,14 @@ ScanVignettes = function(mapID)
             end
         end
     end
-    local source = db.vignetteRadarMapNotesVisible == true
+    local constellationWantsNotes = db.vignetteRadarEnabled == true
+        and db.vignetteRadarConstellationEnabled == true
+        and db.vignetteRadarConstellationSourceMode ~= "live"
+    local mapNoteDemand = db.vignetteRadarMapNotesVisible == true or constellationWantsNotes
+    local source = mapNoteDemand
         and db.vignetteRadarPOISource or "none"
     local fusionSources, fusionKey
-    if db.vignetteRadarMapNotesVisible == true and db.vignetteRadarSourceFusion
+    if mapNoteDemand and db.vignetteRadarSourceFusion
         and type(db.vignetteRadarFusionSources) == "table" then
         fusionSources = {}
         for index = 1, math.min(#db.vignetteRadarFusionSources, 8) do
@@ -6429,8 +6605,8 @@ ScanVignettes = function(mapID)
         mapNotesMapID, mapNotesSource, mapNotesUpdatedAt = nil, nil, nil
     elseif mapNotesMapID ~= mapID or mapNotesSource ~= sourceKey
         or not mapNotesUpdatedAt or now - mapNotesUpdatedAt >=
-            (Settings().vignetteRadarPerformance == "low" and 20
-                or Settings().vignetteRadarPerformance == "balanced" and 10 or 5) then
+            (db.vignetteRadarPerformance == "low" and 20
+                or db.vignetteRadarPerformance == "balanced" and 10 or 5) then
         local pois = addon.VignetteRadarPOIs
         local fusion = addon.VignetteRadarSourceFusion
         if fusionKey and fusion and type(fusion.Collect) == "function" then
@@ -6456,6 +6632,22 @@ ScanVignettes = function(mapID)
         local guide = worldFocus.ZygorNote(mapID, MapToWorld, MapVector)
         if guide then activeMapNotes[#activeMapNotes + 1] = guide end
     end
+    -- Blizzard's events, delves and races join as notes (Data/AreaPOIs.lua).
+    if addon.VignetteRadarAreaPOIs and mapID then
+        addon.VignetteRadarAreaPOIs.AppendTo(activeMapNotes, mapID, now)
+    end
+    -- Learned rare spawns fill in where no pack note covers them (Data/RareSpawns.lua).
+    if addon.VignetteRadarRareSpawns and mapID then
+        addon.VignetteRadarRareSpawns.AppendTo(activeMapNotes, mapID)
+    end
+    -- Things tracked in Blizzard's collections UI (Data/CollectionTracking.lua).
+    if addon.VignetteRadarCollectionTracking and mapID then
+        addon.VignetteRadarCollectionTracking.AppendTo(activeMapNotes, mapID)
+    end
+    -- Points the group shared (Routes/SharedSightings.lua), evidence "party".
+    if addon.VignetteRadarSharedSightings and mapID then
+        addon.VignetteRadarSharedSightings.AppendTo(activeMapNotes, mapID)
+    end
     addon._rawMapNotes = activeMapNotes
     local features = Features()
     local hideNames = features and next(features.GetHiddenMarkerNames())
@@ -6470,8 +6662,11 @@ ScanVignettes = function(mapID)
         end
         activeMapNotes = shown
     end
+    -- Done, duplicate and out-of-range pack notes leave here, before every reader.
+    if addon.VignetteRadarDeclutter then
+        activeMapNotes = addon.VignetteRadarDeclutter.Apply(activeMapNotes, activeTargets, player, db)
+    end
     if #activeMapNotes > 1 then
-        local player = PlayerSnapshot(mapID)
         if player then
             table.sort(activeMapNotes, function(left, right)
                 local ldx, ldy = left.worldX - player.worldX, left.worldY - player.worldY
@@ -6483,7 +6678,7 @@ ScanVignettes = function(mapID)
     if addon.VignetteRadarExploration then
         local exploration = addon.VignetteRadarExploration
         exploration.ValidateQuestFocus(activeQuests, changedMap)
-        if Settings().vignetteRadarFollowTrackedQuest and C_SuperTrack
+        if db.vignetteRadarFollowTrackedQuest and C_SuperTrack
             and type(C_SuperTrack.GetSuperTrackedQuestID) == "function" then
             local trackedID = SafeNumber(Call(C_SuperTrack.GetSuperTrackedQuestID))
             local available = false
@@ -6497,7 +6692,7 @@ ScanVignettes = function(mapID)
         end
     end
     if Features() then
-        local worldMapMode = Settings().vignetteRadarWorldMap ~= false
+        local worldMapMode = db.vignetteRadarWorldMap ~= false
         if activeWorldMapMode ~= nil and worldMapMode ~= activeWorldMapMode then
             Features().Update({}, mapID, Now(), { enabled = false })
             pulseUntil = 0
@@ -6505,7 +6700,7 @@ ScanVignettes = function(mapID)
         activeWorldMapMode = worldMapMode
         local alerts
         activeTargets, alerts = Features().Update(activeTargets, mapID, Now(), {
-            enabled = Settings().vignetteRadarEnabled == true, preview = preview,
+            enabled = db.vignetteRadarEnabled == true, preview = preview,
         })
         if alerts and #alerts > 0 then
             local favorite = false
@@ -6513,16 +6708,17 @@ ScanVignettes = function(mapID)
                 pulseUntil = math.max(pulseUntil, target.newUntil or 0)
                 favorite = favorite or Favorite(target)
             end
-            if Settings().vignetteRadarAlertSound == true and not Quiet() and PlaySound and SOUNDKIT then
+            if db.vignetteRadarAlertSound == true and not Quiet() and PlaySound and SOUNDKIT then
                 local sound = favorite and SOUNDKIT.RAID_WARNING or SOUNDKIT.TELL_MESSAGE
                     or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON
                 if sound then pcall(PlaySound, sound, "SFX") end
             end
+            -- Louder tiers (banner, taskbar flash) live in Core/AlertTiers.lua.
+            if addon.VignetteRadarAlertTiers then addon.VignetteRadarAlertTiers.Fire(alerts, db) end
         end
     end
     local exploration = addon.VignetteRadarExploration
-    if exploration and not preview and Settings().vignetteRadarEnabled == true then
-        local player = PlayerSnapshot(mapID)
+    if exploration and not preview and db.vignetteRadarEnabled == true then
         exploration.UpdateTrail(player, mapID, Now())
         if exploration.CheckRouteArrival then exploration.CheckRouteArrival(player, mapID) end
         exploration.RecordSightings(activeTargets, mapID)
@@ -6531,7 +6727,7 @@ ScanVignettes = function(mapID)
             approach.newUntil = Now() + 3
             approachPulseKey, approachPulseUntil = approach.key, approach.newUntil
             pulseUntil = math.max(pulseUntil, approach.newUntil)
-            if Settings().vignetteRadarAlertSound == true and PlaySound and SOUNDKIT then
+            if db.vignetteRadarAlertSound == true and PlaySound and SOUNDKIT then
                 pcall(PlaySound, SOUNDKIT.TELL_MESSAGE or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON, "SFX")
             end
         end
@@ -6541,12 +6737,18 @@ ScanVignettes = function(mapID)
             if target.key == approachPulseKey then target.newUntil = approachPulseUntil; break end
         end
     end
+    -- One registry snapshot per scan: every reader below and every display
+    -- until the next scan sees the same lists and the same view.
+    addon.VignetteRadarPoints.Publish({ mapID = mapID, player = player,
+        range = displayedRange or db.vignetteRadarRange,
+        targets = activeTargets, quests = activeQuests, notes = activeMapNotes,
+        pins = exploration and mapID and exploration.GetPins(mapID) or nil })
     if addon.VignetteRadarBeacons then
-        addon.VignetteRadarBeacons.Sync(mapID, PlayerSnapshot(mapID),
+        addon.VignetteRadarBeacons.Sync(mapID, player,
             activeTargets, activeQuests, activeMapNotes, TargetVisible)
     end
     if worldFocus and not preview then
-        local routePlayer = PlayerSnapshot(mapID)
+        local routePlayer = player
         local routeQuests = addon.VignetteRadarRouteQuests
         if routeQuests then
             routeQuests.Bind(mapID, routePlayer, MapToWorld, MapVector, db)
@@ -6559,12 +6761,15 @@ ScanVignettes = function(mapID)
         if outcomes then outcomes.Sync(activeTargets, activeQuests) end
     end
     if not preview and addon.VignetteRadarFeatureRuntime then
-        addon.VignetteRadarFeatureRuntime.Observe(mapID, PlayerSnapshot(mapID), activeTargets)
+        addon.VignetteRadarFeatureRuntime.Observe(mapID, player, activeTargets)
     end
     addon.UpdateAtlasSnapshot(mapID, now, changedMap)
+    addon._spatialGeneration = (addon._spatialGeneration or 0) + 1
+    return player
 end
 
 RefreshRadar = function(rescan)
+    if not rescan then addon._spatialGeneration = (addon._spatialGeneration or 0) + 1 end
     if addon.VignetteRadarZygor then
         addon.VignetteRadarZygor.Bind(MapToWorld, MapVector, CurrentMapID, RefreshZygorVisual)
     end
@@ -6578,16 +6783,20 @@ RefreshRadar = function(rescan)
         (#exploration.GetPins(mapID) > 0 or #exploration.GetRoute(mapID) > 0
             or (settings.vignetteRadarBreadcrumbs and settings.vignetteRadarTrailLifetime <= 5)
             or (trailMap == mapID and #trail > 1))
-    if addon.VignetteRadarQuickConfig and addon.VignetteRadarQuickConfig.Refresh then
+    if settings.vignetteRadarLauncherVisible ~= false or launcherPeekActive then EnsureLauncher() end
+    local player
+    if rescan then player = ScanVignettes(mapID) end
+    local quickPanel = _G.VignetteRadarQuickConfigPanel
+    if quickPanel and quickPanel:IsShown() and addon.VignetteRadarQuickConfig
+        and addon.VignetteRadarQuickConfig.Refresh then
         addon.VignetteRadarQuickConfig.Refresh()
     end
-    if settings.vignetteRadarLauncherVisible ~= false or launcherPeekActive then EnsureLauncher() end
-    if rescan then ScanVignettes(CurrentMapID()) end
     local hasMapNotes = false
     if #activeMapNotes > 0 and (settings.vignetteRadarMapNotesVisible == true
         and (settings.vignetteRadarPOISource ~= "none" or settings.vignetteRadarSourceFusion)
-        or settings.vignetteRadarWorldFocusZygor) then
-        local player = PlayerSnapshot(mapID)
+        or settings.vignetteRadarWorldFocusZygor or settings.vignetteRadarAreaPOIs == true
+        or settings.vignetteRadarRareSpawnNotes == true) then
+        player = player or PlayerSnapshot(mapID)
         local range = exploration and exploration.Range(player, nil) or settings.vignetteRadarRange
         if player and type(range) == "number" then
             for _, note in ipairs(activeMapNotes) do
@@ -6608,7 +6817,7 @@ RefreshRadar = function(rescan)
     local hasQuestStarts = false
     if settings.vignetteRadarQuestStartBadges and addon.VignetteRadarAvailableStarts
         and #addon.VignetteRadarAvailableStarts > 0 then
-        local player = PlayerSnapshot(mapID)
+        player = player or PlayerSnapshot(mapID)
         local range = exploration and exploration.Range(player, nil) or settings.vignetteRadarRange
         if player and type(range) == "number" then
             for _, entry in ipairs(addon.VignetteRadarAvailableStarts) do
@@ -6630,7 +6839,7 @@ RefreshRadar = function(rescan)
         if panel and panel:IsShown() then Morph.MoveLauncherToRadar(); panel:Hide() end
         Morph.SyncLauncherVisibility()
         if launcher then UpdateLauncher(0, true) end
-        if addon.VignetteRadarRouteArrow then addon.VignetteRadarRouteArrow.Refresh() end
+        if addon.VignetteRadarGuidePanel then addon.VignetteRadarGuidePanel.Refresh() end
         return
     end
     if manualPanelState == false then
@@ -6662,7 +6871,7 @@ RefreshRadar = function(rescan)
         studio.SetCardAnchor(panel and panel:IsShown() and panel
             or launcher and launcher:IsShown() and launcher or nil)
     end
-    if addon.VignetteRadarRouteArrow then addon.VignetteRadarRouteArrow.Refresh() end
+    if addon.VignetteRadarGuidePanel then addon.VignetteRadarGuidePanel.Refresh() end
 end
 
 addon.RefreshVignetteRadar = function(rescan)
@@ -6691,8 +6900,10 @@ addon.VignetteRadarAPI = {
     GetPanel = function() return panel end,
     GetTargets = function() return activeTargets end,
     GetQuests = function() return activeQuests end,
+    -- The slot the radar gave this quest wins, even when the map changed
+    -- since the scan, so the tracker and the radar always agree.
     GetQuestColorSlot = function(questID)
-        return (questColorMapID == CurrentMapID() and questColorByID[questID])
+        return questColorByID[questID]
             or (type(questID) == "number"
             and (questID % #QUEST_COLORS) + 1) or 1
     end,
@@ -6715,11 +6926,11 @@ addon.VignetteRadarAPI = {
         local atlas = addon.VignetteRadarAtlas
         if not atlas then return false, "Living Atlas unavailable" end
         atlas.SetOnSelect(function(entry)
-            local focus = addon.VignetteRadarWorldFocus
-            if not focus then return end
-            if entry.questID then focus.SelectQuest(entry.questID)
-            elseif entry.targetRef then focus.SelectTarget(entry.targetRef)
-            elseif entry.noteRef then focus.SelectNote(entry.noteRef) end
+            local focus = addon.VignetteRadarFocus
+            local options = { source = "atlas" }
+            if entry.questID then focus.Select(focus.Quest(entry.questID), options)
+            elseif entry.targetRef then focus.Select(focus.Target(entry.targetRef), options)
+            elseif entry.noteRef then focus.Select(focus.Note(entry.noteRef), options) end
         end)
         local opened, reason = atlas.Toggle()
         if opened then addon._radarAtlasUpdatedAt = nil; RefreshRadar(true) end
@@ -6754,11 +6965,27 @@ addon.VignetteRadarAPI = {
         return addon.VignetteRadarZygor.Pin("objective")
     end,
     GetPlayerSnapshot = function() return PlayerSnapshot(CurrentMapID()) end,
+    GetSpatialSnapshot = function(mode)
+        return addon.VignetteRadarConstellationData
+            and addon.VignetteRadarConstellationData.GetSnapshot(mode) or nil
+    end,
+    InvalidateSpatialSnapshot = function()
+        addon._spatialGeneration = (addon._spatialGeneration or 0) + 1
+    end,
+    -- The lists themselves come from the point registry.
+    GetSpatialSources = function()
+        return CurrentMapID(), CategoryEnabled, Ignored, Favorite, MapNoteMinimumDistance
+    end,
+    RefreshConstellationControl = function()
+        if panel and panel.RefreshCornerTools then panel.RefreshCornerTools() end
+    end,
     GetSelectableTargets = SelectableTargets,
     GetRouteCandidates = function()
         local mapID = CurrentMapID()
         local candidates = {}
-        local quests = #activeQuests > 0 and activeQuests or CollectQuests(mapID, true)
+        local points = addon.VignetteRadarPoints
+        local quests = points.Refs("quest")
+        if #quests == 0 then quests = CollectQuests(mapID, true) end
         for _, quest in ipairs(quests) do
             if #candidates >= 128 then break end
             candidates[#candidates + 1] = {
@@ -6768,7 +6995,7 @@ addon.VignetteRadarAPI = {
             }
         end
         local liveForNotes = {}
-        for _, target in ipairs(activeTargets) do
+        for _, target in ipairs(points.Refs("live")) do
             if #candidates >= 224 then break end
             if (target.category == "rare" or target.category == "treasure")
                 and not target.stale and CategoryEnabled(target.category) and not Ignored(target)
@@ -6781,16 +7008,16 @@ addon.VignetteRadarAPI = {
                 liveForNotes[#liveForNotes + 1] = target
             end
         end
-        for _, note in ipairs(activeMapNotes) do
+        for _, note in ipairs(points.Refs("saved")) do
             if #candidates >= 256 then break end
-            local kind = note.kind == "mob" and "rare" or note.kind
+            local kind = points.Kind(note)
             if (kind == "rare" or kind == "treasure")
                 and Settings().vignetteRadarPOITypes[note.kind] ~= false
                 and not (addon.VignetteRadarRecent
                     and addon.VignetteRadarRecent.IsHidden(note, Settings())) then
                 local duplicate = false
                 for _, target in ipairs(liveForNotes) do
-                    if addon.VignetteRadarTesting.MapNoteMatchesLive(note, target) then
+                    if points.Matches(note, target) then
                         duplicate = true
                         break
                     end
@@ -6827,6 +7054,7 @@ addon.VignetteRadarAPI = {
     end,
     ToggleQuestKey = addon.ToggleVignetteRadarQuestKey,
     RefreshPresentation = function()
+        addon._spatialGeneration = (addon._spatialGeneration or 0) + 1
         if panel and panel:IsShown() then Render() end
         if launcher then UpdateLauncher(0, true) end
     end,
@@ -6837,6 +7065,7 @@ do
     if legend and type(legend.ApplyDefaults) == "function" then pcall(legend.ApplyDefaults, Settings()) end
     if legend and type(legend.SetChangeCallback) == "function" then
         legend.SetChangeCallback(function()
+            addon._spatialGeneration = (addon._spatialGeneration or 0) + 1
             ReconcileFocusedTarget()
             local picker = TargetPickerAPI()
             if picker and type(picker.Refresh) == "function" then pcall(picker.Refresh) end
@@ -6847,13 +7076,15 @@ do
     end
     local picker = TargetPickerAPI()
     if picker and type(picker.SetProvider) == "function" then pcall(picker.SetProvider, SelectableTargets) end
-    if picker and type(picker.SetChangeCallback) == "function" then
-        picker.SetChangeCallback(function()
-            if panel and panel:IsShown() then Render() end
-            if launcher then UpdateLauncher(0, true) end
-            UpdateTargetButton()
-        end)
-    end
+    -- A focus change from any view (radar, list, HUD, bar, tracker, map)
+    -- redraws the radar, its launcher and the HUD once.
+    addon.VignetteRadarFocus.OnChanged(function()
+        addon._spatialGeneration = (addon._spatialGeneration or 0) + 1
+        if addon.VignetteRadarConstellation then addon.VignetteRadarConstellation.FocusChanged() end
+        if panel and panel:IsShown() then Render() end
+        if launcher then UpdateLauncher(0, true) end
+        UpdateTargetButton()
+    end)
 end
 
 function addon.ResetVignetteRadarPositions()
@@ -6861,7 +7092,7 @@ function addon.ResetVignetteRadarPositions()
     Settings().vignetteRadarPosition = nil
     Settings().vignetteRadarCirclePosition = nil
     Settings().vignetteRadarLauncherPosition = nil
-    if addon.VignetteRadarRouteArrow then addon.VignetteRadarRouteArrow.ResetPosition() end
+    if addon.VignetteRadarGuidePanel then addon.VignetteRadarGuidePanel.ResetPosition() end
     if panel then PlacePanel(30, UIParent:GetHeight() - 520, panel:GetScale()) end
     Settings().vignetteRadarLauncherVisible = true
     local button = EnsureLauncher()
@@ -6872,7 +7103,6 @@ function addon.ResetVignetteRadarPositions()
     button:Show()
     SaveLauncherPosition()
     if addon.VignetteRadarQuickConfig then addon.VignetteRadarQuickConfig.Reanchor(panel) end
-    if addon.RefreshVignetteRadarOptions then addon.RefreshVignetteRadarOptions() end
     if addon.VignetteRadarQuickConfig and addon.VignetteRadarQuickConfig.Refresh then
         addon.VignetteRadarQuickConfig.Refresh()
     end
@@ -6889,7 +7119,6 @@ function addon.SetVignetteRadarRange(range)
             Settings().vignetteRadarRange = supported
             addon.VignetteRadarViewProfiles.Record(Settings())
             RefreshRadar(false)
-            if addon.RefreshVignetteRadarOptions then addon.RefreshVignetteRadarOptions() end
             return true
         end
     end
@@ -6902,6 +7131,7 @@ function addon.SetVignetteRadarEnabled(enabled)
     preview = false
     manualPanelState = nil
     RefreshRadar(true)
+    if addon.VignetteRadarConstellation then addon.VignetteRadarConstellation.Refresh() end
 end
 
 function addon.SetVignetteRadarLayout(layout)
@@ -6912,7 +7142,6 @@ function addon.SetVignetteRadarLayout(layout)
     end
     Settings().vignetteRadarLayout = layout
     RefreshRadar(false)
-    if addon.RefreshVignetteRadarOptions then addon.RefreshVignetteRadarOptions() end
     return true
 end
 
@@ -6935,13 +7164,33 @@ end
 function addon.SetVignetteRadarNorthUp(enabled)
     Settings().vignetteRadarNorthUp = enabled == true
     RefreshRadar(false)
-    if addon.RefreshVignetteRadarOptions then addon.RefreshVignetteRadarOptions() end
 end
 
+-- Trails: "off" | "follow" | "lead" | "both". The Follow half is mirrored
+-- into vignetteRadarBreadcrumbs, which the breadcrumb code keeps reading.
+function addon.SetVignetteRadarTrailMode(mode)
+    local modes = addon.VignetteRadarTrailMode
+    if not (modes and modes.valid[mode]) then return false end
+    local settings = Settings()
+    settings.vignetteRadarTrailMode = mode
+    settings.vignetteRadarBreadcrumbs = modes.Follows(mode)
+    if addon.ValidateSettings then addon.ValidateSettings() end
+    if addon.Trace then addon.Trace.Log("trail", "mode %s", mode) end
+    RefreshRadar(false)
+    local quick = addon.VignetteRadarQuickConfig
+    if quick and quick.Refresh then quick.Refresh() end
+    return true
+end
+
+-- The toolbar toggle and older callers switch only the Follow half.
 function addon.SetVignetteRadarTrailEnabled(enabled)
+    local modes = addon.VignetteRadarTrailMode
+    if modes then
+        return addon.SetVignetteRadarTrailMode(modes.Compose(enabled == true,
+            modes.Leads(Settings().vignetteRadarTrailMode)))
+    end
     Settings().vignetteRadarBreadcrumbs = enabled == true
     RefreshRadar(false)
-    if addon.RefreshVignetteRadarOptions then addon.RefreshVignetteRadarOptions() end
     local quick = addon.VignetteRadarQuickConfig
     if quick and quick.Refresh then quick.Refresh() end
 end
@@ -6949,10 +7198,15 @@ end
 function addon.SetVignetteRadarTrailStyle(style, enable)
     if not TRAIL_STYLE_BY_ID[style] then return false end
     Settings().vignetteRadarTrailStyle = style
-    if enable then Settings().vignetteRadarBreadcrumbs = true end
+    if enable then
+        Settings().vignetteRadarBreadcrumbs = true
+        local modes = addon.VignetteRadarTrailMode
+        if modes then
+            Settings().vignetteRadarTrailMode = modes.Compose(true, modes.Leads(Settings().vignetteRadarTrailMode))
+        end
+    end
     RefreshRadar(false)
     if RefreshTrailPopup then RefreshTrailPopup() end
-    if addon.RefreshVignetteRadarOptions then addon.RefreshVignetteRadarOptions() end
     local quick = addon.VignetteRadarQuickConfig
     if quick and quick.Refresh then quick.Refresh() end
     return true
@@ -6980,7 +7234,6 @@ function addon.SetVignetteRadarTrailOption(key, value)
     Settings()[key] = value
     if panel and panel:IsShown() then Render() end
     if RefreshTrailPopup then RefreshTrailPopup() end
-    if addon.RefreshVignetteRadarOptions then addon.RefreshVignetteRadarOptions() end
     local quick = addon.VignetteRadarQuickConfig
     if quick and quick.Refresh then quick.Refresh() end
     return true
@@ -6989,7 +7242,6 @@ end
 function addon.SetVignetteRadarQuietCombat(fadeInCombat)
     Settings().vignetteRadarQuietCombat = fadeInCombat == true
     RefreshRadar(false)
-    if addon.RefreshVignetteRadarOptions then addon.RefreshVignetteRadarOptions() end
     local quick = addon.VignetteRadarQuickConfig
     if quick and quick.Refresh then quick.Refresh() end
 end
@@ -6997,7 +7249,6 @@ end
 function addon.SetVignetteRadarKeepVisibleCombat(enabled)
     Settings().vignetteRadarKeepVisibleCombat = enabled == true
     RefreshRadar(false)
-    if addon.RefreshVignetteRadarOptions then addon.RefreshVignetteRadarOptions() end
     local quick = addon.VignetteRadarQuickConfig
     if quick and quick.Refresh then quick.Refresh() end
 end
@@ -7029,7 +7280,6 @@ function addon.SetVignetteRadarCircleOnly(enabled)
         if picker and picker.Hide then picker.Hide() end
     end
     RefreshRadar(false)
-    if addon.RefreshVignetteRadarOptions then addon.RefreshVignetteRadarOptions() end
 end
 
 function addon.ToggleVignetteRadarPreview()
@@ -7106,20 +7356,32 @@ end
 function VignetteRadar_ClearFocus()
     local focus = addon.VignetteRadarWorldFocus
     if not focus then return addon.VignetteRadarBindingError("World Focus is unavailable") end
+    addon.VignetteRadarFocus.Clear({ project = false, source = "keybind" })
     local ok, reason = focus.Clear()
     if not ok then addon.VignetteRadarBindingError(reason) end
     RefreshRadar(false)
     return ok
 end
 
-SLASH_VIGNETTERADAR1 = "/vr"
-SLASH_VIGNETTERADAR2 = "/vradar"
-SLASH_VIGNETTERADAR3 = "/vignetteradar"
-SLASH_VIGNETTERADAR4 = "/whradar"
+SLASH_VIGNETTERADAR1 = "/magpie"
+SLASH_VIGNETTERADAR2 = "/vr"
 SlashCmdList.VIGNETTERADAR = function(message)
     message = (message or ""):lower():match("^%s*(.-)%s*$")
     if message == "config" or message == "options" then
         if addon.OpenOptions then addon.OpenOptions() end
+        return
+    elseif message == "undo" then
+        local exploration = addon.VignetteRadarExploration
+        local undone = exploration and exploration.UndoPreset and exploration.UndoPreset()
+        print("Magpie: " .. (undone and "preset undone" or "nothing to undo"))
+        return
+    elseif message == "panels" then
+        local tray = addon.VignetteRadarTray
+        if tray and tray.ResetAllPanels then tray.ResetAllPanels() end
+        print("Magpie: panels docked back under the radar")
+        return
+    elseif message == "navlog" then
+        if addon.VignetteRadarWorldMarker then addon.VignetteRadarWorldMarker.StartNavLog() end
         return
     elseif message == "explore" then
         if addon.VignetteRadarExploration then addon.VignetteRadarExploration.TogglePanel() end
@@ -7130,11 +7392,11 @@ SlashCmdList.VIGNETTERADAR = function(message)
         local route = focus and focus.Diagnostics and focus.Diagnostics()
         local data = pool and pool.Diagnostics and pool.Diagnostics()
         if route and DEFAULT_CHAT_FRAME then
-            DEFAULT_CHAT_FRAME:AddMessage(("Vignette Radar Route: %s (%s), quest %s, %d visible quest points, %d visited, %d available starts."):format(
+            DEFAULT_CHAT_FRAME:AddMessage(("Magpie Route: %s (%s), quest %s, %d visible quest points, %d visited, %d available starts."):format(
                 route.mode, route.state, tostring(route.questID or "none"),
                 route.radarPoints, route.visited, route.availableStarts))
             if data then
-                DEFAULT_CHAT_FRAME:AddMessage(("Vignette Radar Cache: %d/%d quest-log entries scanned, %d local and %d other-map waypoints cached."):format(
+                DEFAULT_CHAT_FRAME:AddMessage(("Magpie Cache: %d/%d quest-log entries scanned, %d local and %d other-map waypoints cached."):format(
                     data.logRead, data.logTotal, data.localPoints, data.otherPoints))
             end
         end
@@ -7154,8 +7416,14 @@ SlashCmdList.VIGNETTERADAR = function(message)
             layout = nextLayout[Settings().vignetteRadarLayout or "classic"]
         end
         if not addon.SetVignetteRadarLayout(layout) and DEFAULT_CHAT_FRAME then
-            DEFAULT_CHAT_FRAME:AddMessage("Vignette Radar: /vr layout [classic, squat, compact]")
+            DEFAULT_CHAT_FRAME:AddMessage("Magpie: /magpie layout [classic, squat, compact]")
         end
+        return
+    elseif message == "focus" then
+        if addon.VignetteRadarQuickConfig then addon.VignetteRadarQuickConfig.OpenPage("World Focus") end
+        return
+    elseif message == "focus next" or message == "focus previous" then
+        VignetteRadar_CycleWorldFocus(message == "focus next" and 1 or -1)
         return
     elseif message == "preview" then
         addon.ToggleVignetteRadarPreview()
@@ -7174,8 +7442,26 @@ SlashCmdList.VIGNETTERADAR = function(message)
         Settings().vignetteRadarEnabled = true
         preview = false
         manualPanelState = true
-    else
+    elseif message == "" then
         ToggleRadarPanel()
+        return
+    else
+        -- help, or anything unknown: the command list instead of a silent toggle.
+        local lines = { "Magpie commands (/magpie or /vr):",
+            "/magpie: show or hide the radar",
+            "/magpie config: settings",
+            "/magpie on | off | recenter | preview",
+            "/magpie layout [classic | squat | compact]",
+            "/magpie focus [next | previous]: waypoint settings, or step through waypoints",
+            "/magpie panels: dock the panels back under the radar",
+            "/magpie explore | pin [name] | undo",
+            "/magpie buttons: the minimap button tray",
+            "/magpie export | import | sweep | today",
+            "/vrtrace on | off: debug log" }
+        if message ~= "help" then table.insert(lines, 1, "Magpie: unknown command \"" .. message .. "\".") end
+        for _, line in ipairs(lines) do
+            if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(line) else print(line) end
+        end
         return
     end
     RefreshRadar(true)
@@ -7211,36 +7497,24 @@ function events:RefreshAfterQuestUpdate()
         RefreshRadar(true)
     end
 end
-for _, event in ipairs({
-    "PLAYER_LOGIN", "PLAYER_LOGOUT", "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA",
-    "VIGNETTES_UPDATED", "VIGNETTE_MINIMAP_UPDATED",
-    "QUEST_LOG_UPDATE", "QUEST_POI_UPDATE", "QUEST_WATCH_LIST_CHANGED",
-    "QUEST_WATCH_UPDATE", "TASK_PROGRESS_UPDATE",
-    "QUEST_ACCEPTED", "QUEST_REMOVED", "QUEST_TURNED_IN", "SUPER_TRACKING_CHANGED",
-    "MINIMAP_UPDATE_TRACKING",
-    "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "ZONE_CHANGED", "ZONE_CHANGED_INDOORS",
-    "LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED",
-    "GLOBAL_MOUSE_DOWN",
-}) do
-    events:RegisterEvent(event)
+function events:QueueFullRefresh()
+    if not (C_Timer and C_Timer.After) then
+        RefreshRadar(true)
+        return
+    end
+    if self._fullRefreshQueued then return end
+    self._fullRefreshQueued = true
+    -- Vignette and zone events arrive in bursts; scan once on the next frame.
+    C_Timer.After(0, function()
+        self._fullRefreshQueued = false
+        RefreshRadar(true)
+    end)
 end
-events:SetScript("OnEvent", function(_, event)
-    if event == "PLAYER_LOGIN" and addon.VignetteRadarFeatureRuntime then
-        addon.VignetteRadarFeatureRuntime.Initialize()
-    elseif event == "PLAYER_REGEN_ENABLED" and addon.VignetteRadarFeatureRuntime then
-        addon.VignetteRadarFeatureRuntime.Configure()
-    elseif event == "PLAYER_LOGOUT" then
-        if addon.VignetteRadarFeatureRuntime then addon.VignetteRadarFeatureRuntime.Shutdown() end
-        return
-    end
-    if event == "LOOT_OPENED" or event == "LOOT_SLOT_CLEARED"
-        or event == "LOOT_CLOSED" then
-        local focus = addon.VignetteRadarWorldFocus
-        local learning = addon.VignetteRadarTreasureLearning
-        if learning and learning.OnLootEvent then learning.OnLootEvent(event) end
-        if focus and focus.OnLootEvent and focus.OnLootEvent(event) then RefreshRadar(false) end
-        return
-    end
+-- Events arrive through the bus (Core/Bus.lua). Modules earlier in the TOC
+-- subscribe for themselves and so run first: Recent, QuestData and
+-- RouteQuests drop their quest caches, TreasureLearning and WorldFocus take
+-- loot, and FeatureRuntime follows login, leaving combat and logout.
+events.OnBusEvent = function(event)
     if event == "GLOBAL_MOUSE_DOWN" then
         -- This event runs only for clicks, never in the radar update loop.
         -- Keep related popups open while the pointer is inside any of them.
@@ -7282,27 +7556,14 @@ events:SetScript("OnEvent", function(_, event)
             if panel.RefreshCornerTools then panel.RefreshCornerTools() end
         end
         return
-    elseif message == "focus" then
-        if addon.VignetteRadarQuickConfig then addon.VignetteRadarQuickConfig.OpenPage("World Focus") end
-        return
-    elseif message == "focus next" or message == "focus previous" then
-        VignetteRadar_CycleWorldFocus(message == "focus next" and 1 or -1)
-        return
     end
     local questUpdated = event == "QUEST_LOG_UPDATE" or event == "QUEST_POI_UPDATE"
         or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_WATCH_UPDATE"
         or event == "TASK_PROGRESS_UPDATE" or event == "QUEST_ACCEPTED"
         or event == "QUEST_REMOVED" or event == "QUEST_TURNED_IN"
-    if event == "QUEST_LOG_UPDATE" and addon.VignetteRadarRecent then
-        addon.VignetteRadarRecent.InvalidateQuests()
-    end
     local mapChanged = event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA"
         or event == "ZONE_CHANGED" or event == "ZONE_CHANGED_INDOORS"
-    if addon.VignetteRadarQuestData and (mapChanged or questUpdated) then
-        addon.VignetteRadarQuestData.Invalidate(mapChanged and "map" or "quest")
-        if addon.VignetteRadarRouteQuests then
-            addon.VignetteRadarRouteQuests.Invalidate(mapChanged and "map" or "quest")
-        end
+    if mapChanged or questUpdated then
         addon.VignetteRadarStartsNextAt = nil
         addon._focusQuestCache = nil
     end
@@ -7315,7 +7576,7 @@ events:SetScript("OnEvent", function(_, event)
         end
     end
     if questUpdated then events:RefreshAfterQuestUpdate()
-    else RefreshRadar(true) end
+    else events:QueueFullRefresh() end
     if event == "PLAYER_LOGIN" or mapChanged or questUpdated then
         local studio = addon.VignetteRadarExpeditionStudio
         if studio then
@@ -7328,16 +7589,21 @@ events:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" and C_Timer and C_Timer.After then
         C_Timer.After(0.5, function() RefreshRadar(true) end)
     end
-end)
+end
+for _, topic in ipairs({ "LOGIN", "MAP_CHANGED", "VIGNETTES", "QUEST_CHANGED",
+    "SUPERTRACK", "TRACKING", "COMBAT", "GLOBAL_MOUSE_DOWN" }) do
+    addon.Bus.On(topic, events.OnBusEvent)
+end
 -- Detection and expiry continue when the user hides both visual surfaces.
 events:SetScript("OnUpdate", function(self, elapsed)
-    if Settings().vignetteRadarEnabled ~= true or preview
-        or (panel and panel:IsShown()) or (launcher and launcher:IsShown()) then
+    local settings = not preview and not (panel and panel:IsShown())
+        and not (launcher and launcher:IsShown()) and Settings()
+    if not settings or settings.vignetteRadarEnabled ~= true then
         self._idleElapsed = 0
         return
     end
     self._idleElapsed = (self._idleElapsed or 0) + elapsed
-    if self._idleElapsed >= addon.VignetteRadarScanSeconds() then
+    if self._idleElapsed >= addon.VignetteRadarScanSeconds(settings) then
         self._idleElapsed = 0
         local started = ProfileTime()
         RefreshRadar(true)

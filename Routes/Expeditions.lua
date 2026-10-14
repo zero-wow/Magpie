@@ -10,22 +10,7 @@ local MAX_GOALS, MAX_DEPS, MAX_TEXT = 64, 16, 100
 local KINDS = { quest = true, rare = true, treasure = true, pin = true }
 local TERMINAL = { complete = true, skipped = true }
 
-local function Safe(value)
-    if type(issecretvalue) ~= "function" then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and not secret
-end
-
-local function Field(record, key)
-    if type(record) ~= "table" or not Safe(record) then return nil end
-    local ok, value = pcall(function() return record[key] end)
-    return ok and Safe(value) and value or nil
-end
-
-local function Number(value)
-    return Safe(value) and type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge and value or nil
-end
+local Safe, Field, Number = addon.Secret.Safe, addon.Secret.Field, addon.Secret.Number
 
 local function ID(value)
     return type(value) == "string" and Safe(value) and #value > 0

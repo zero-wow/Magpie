@@ -6,29 +6,21 @@ local ROWS_PER_PAGE = 5
 local ACCENT = { 0.05, 0.82, 0.62 }
 local CIRCLE_TEXTURE = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 local SKULL_TEXTURE = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"
-local FONT_FALLBACK = "Fonts\\FRIZQT__.TTF"
-local ROUNDED_FACE = "Interface\\AddOns\\VignetteRadar\\Media\\radar-rounded-square.tga"
-local ROUNDED_EDGE = "Interface\\AddOns\\VignetteRadar\\Media\\radar-rounded-border.tga"
-local ROUNDED_CONTROL = "Interface\\AddOns\\VignetteRadar\\Media\\control-rounded-square.tga"
+local ROUNDED_FACE = "Interface\\AddOns\\Magpie\\Media\\radar-rounded-square.tga"
+local ROUNDED_EDGE = "Interface\\AddOns\\Magpie\\Media\\radar-rounded-border.tga"
 
 local panel
 local attachedTo
 local provider
 local changeCallback
-local focusKey, focusName
 local page = 1
 
 local API = {}
 addon.VignetteRadarTargetPicker = API
 
-local function FontPath()
-    return EllesmereUI and (EllesmereUI.EXPRESSWAY or EllesmereUI._font)
-        or STANDARD_TEXT_FONT or FONT_FALLBACK
-end
-
 local function Text(parent, size, value)
     local label = parent:CreateFontString(nil, "OVERLAY")
-    label:SetFont(FontPath(), size, "")
+    addon.VignetteRadarStyle.SetFont(label, size, "")
     label:SetText(value or "")
     label:SetTextColor(0.88, 0.90, 0.92, 1)
     label:SetJustifyH("LEFT")
@@ -42,26 +34,6 @@ local function RoundedTexture(parent, path, layer, r, g, b, alpha)
     art:SetTexture(path)
     art:SetVertexColor(r, g, b, alpha)
     return art
-end
-
-local function ChromeButton(parent, width, height, label)
-    local button = CreateFrame("Button", nil, parent)
-    button:SetSize(width, height)
-    button.face = RoundedTexture(button, ROUNDED_CONTROL, "BACKGROUND", .12, .16, .17, .72)
-    button.label = Text(button, 9, label)
-    button.label:SetAllPoints(button)
-    button.label:SetJustifyH("CENTER")
-    button:SetScript("OnEnter", function(self)
-        self.face:SetVertexColor(ACCENT[1], ACCENT[2], ACCENT[3], .25)
-        self.label:SetTextColor(1, 1, 1, 1)
-    end)
-    button:SetScript("OnLeave", function(self)
-        self.face:SetVertexColor(.12, .16, .17, .72)
-        self.label:SetTextColor(.78, .84, .85, 1)
-        if GameTooltip then GameTooltip:Hide() end
-    end)
-    button.label:SetTextColor(.78, .84, .85, 1)
-    return button
 end
 
 local function Targets()
@@ -143,20 +115,28 @@ function API.SetChangeCallback(callback)
     changeCallback = type(callback) == "function" and callback or nil
 end
 
+-- The focused target lives in the shared Focus service; this list is one
+-- of its views and never moves the waypoint itself.
+local function Focus()
+    return addon.VignetteRadarFocus
+end
+
 function API.GetFocus()
-    return focusKey
+    return Focus().GetTargetKey()
 end
 
 function API.GetFocusName()
-    return focusName
+    return Focus().GetTargetName()
 end
 
 function API.SetFocus(key, name)
     key = type(key) == "string" and key ~= "" and key or nil
     name = key and type(name) == "string" and name or nil
-    if focusKey == key and focusName == name then return false end
-    focusKey, focusName = key, name
-    NotifyChanged()
+    if not key then
+        return Focus().Clear({ type = "target", project = false, source = "picker" })
+    end
+    if API.GetFocus() == key and API.GetFocusName() == name then return false end
+    Focus().Select({ type = "target", key = key, name = name }, { project = false, source = "picker" })
     return true
 end
 
@@ -165,13 +145,13 @@ function API.ClearFocus()
 end
 
 function API.ValidateTargets(targets)
+    local focusKey = API.GetFocus()
     if not focusKey then return false end
     targets = type(targets) == "table" and targets or Targets()
     for _, target in ipairs(targets) do
         if target.key == focusKey then return false end
     end
-    focusKey, focusName = nil, nil
-    API.Refresh()
+    Focus().Clear({ type = "target", project = false, source = "validate" })
     return true
 end
 
@@ -214,7 +194,7 @@ local function CreateRow(parent, index)
     row.favorite:SetWidth(10)
     row.favorite:SetTextColor(1, 0.82, 0.33, 1)
     row.favorite:Hide()
-    row.name = Text(row, 10, "")
+    row.name = Text(row, 9, "")
     row.name:SetPoint("TOPLEFT", 46, -6)
     row.name:SetWidth(121)
     if row.name.SetMaxLines then row.name:SetMaxLines(1) end
@@ -240,7 +220,7 @@ local function CreateRow(parent, index)
             return
         end
         if button and button ~= "LeftButton" then return end
-        if focusKey == target.key then API.ClearFocus() else API.SetFocus(target.key, target.name) end
+        if API.GetFocus() == target.key then API.ClearFocus() else API.SetFocus(target.key, target.name) end
     end)
     row:SetScript("OnEnter", function(self)
         self.hover:Show()
@@ -257,6 +237,21 @@ local function FrameValue(frame, method)
     if not (frame and type(frame[method]) == "function") then return nil end
     local value = frame[method](frame)
     return type(value) == "number" and value or nil
+end
+
+-- Puts back a radar panel that Attach moved to make room, unless the player
+-- has dragged it since. holder.shiftedAnchor stores the original spot.
+local function RestoreShift(holder)
+    if not (holder and holder.shiftedAnchor) then return end
+    local saved = holder.shiftedAnchor
+    holder.shiftedAnchor = nil
+    local anchor = saved.anchor
+    local currentLeft = FrameValue(anchor, "GetLeft")
+    if currentLeft and math.abs(currentLeft - saved.shiftedLeft) <= 2 then
+        anchor:ClearAllPoints()
+        anchor:SetPoint("TOPLEFT", UIParent, "TOPLEFT", saved.left,
+            (saved.top * saved.scale - saved.screenHeight) / saved.scale)
+    end
 end
 
 local function Attach(anchor)
@@ -294,9 +289,13 @@ local function Attach(anchor)
         -- A centered Squat panel can leave no side or vertical space. Move the
         -- whole panel only when it is the anchor, keeping the saved position intact.
         if anchor and anchorWidth and anchorWidth >= 100 and left and top and screenWidth and screenHeight
-            and anchorWidth + PANEL_W + 24 <= screenWidth
+            and anchorWidth + PANEL_W + 24 <= screenWidth and not panel.shiftedAnchor
             and type(anchor.ClearAllPoints) == "function" and type(anchor.SetPoint) == "function" then
             local shiftedLeft = math.max(8, screenWidth - PANEL_W - 12 - anchorWidth)
+            -- Remember where the radar was so hiding this panel puts it back.
+            panel.shiftedAnchor = { anchor = anchor, left = left / anchorScale,
+                top = top / anchorScale, scale = anchorScale,
+                shiftedLeft = shiftedLeft / anchorScale, screenHeight = screenHeight }
             anchor:ClearAllPoints()
             anchor:SetPoint("TOPLEFT", UIParent, "TOPLEFT",
                 shiftedLeft / anchorScale, (top - screenHeight) / anchorScale)
@@ -316,6 +315,7 @@ local function EnsurePanel()
 
     panel = CreateFrame("Frame", "VignetteRadarTargetPickerPanel", UIParent)
     panel:SetSize(PANEL_W, PANEL_H)
+    panel:SetScript("OnHide", function(self) RestoreShift(self) end)
     if panel.SetFrameStrata then panel:SetFrameStrata("DIALOG") end
     if panel.SetClampedToScreen then panel:SetClampedToScreen(true) end
     panel.face = RoundedTexture(panel, ROUNDED_FACE, "BACKGROUND", .04, .05, .06, .98)
@@ -324,7 +324,7 @@ local function EnsurePanel()
     panel.title = Text(panel, 11, "VIGNETTE FOCUS")
     panel.title:SetPoint("TOPLEFT", 10, -9)
     panel.title:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3], 1)
-    panel.subtitle = Text(panel, 8, "Choose one current detection")
+    panel.subtitle = Text(panel, 8, "Choose one detection")
     panel.subtitle:SetPoint("TOPLEFT", 10, -25)
     panel.subtitle:SetWidth(165)
     if panel.subtitle.SetMaxLines then panel.subtitle:SetMaxLines(1) end
@@ -335,24 +335,13 @@ local function EnsurePanel()
     panel.rule:SetSize(PANEL_W - 20, 1)
     panel.rule:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], .15)
 
-    panel.clear = ChromeButton(panel, 58, 20, "SHOW ALL")
+    -- Header and pager actions are atlas icons (UI/IconButton.lua).
+    local icons = addon.VignetteRadarIconButton
+    panel.clear = icons.Create(panel, "eye", { size = 20, label = "Show All Vignettes",
+        tooltip = "Clear the specific target filter while keeping category filters active.",
+        isActive = function() return API.GetFocus and API.GetFocus() ~= nil end,
+        onClick = function() API.ClearFocus() end })
     panel.clear:SetPoint("TOPRIGHT", -9, -8)
-    AddPressState(panel.clear)
-    panel.clear:SetScript("OnClick", function() API.ClearFocus() end)
-    panel.clear:SetScript("OnEnter", function(self)
-        self.face:SetVertexColor(ACCENT[1], ACCENT[2], ACCENT[3], .25)
-        self.label:SetTextColor(1, 1, 1, 1)
-        if not GameTooltip then return end
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Show all vignettes", 1, 1, 1)
-        GameTooltip:AddLine("Clear the specific target filter while keeping category filters active.", 0.55, 0.86, 0.76, true)
-        GameTooltip:Show()
-    end)
-    panel.clear:SetScript("OnLeave", function(self)
-        self.face:SetVertexColor(.12, .16, .17, .72)
-        self.label:SetTextColor(.78, .84, .85, 1)
-        if GameTooltip then GameTooltip:Hide() end
-    end)
 
     panel.rows = {}
     for index = 1, ROWS_PER_PAGE do panel.rows[index] = CreateRow(panel, index) end
@@ -361,11 +350,11 @@ local function EnsurePanel()
     panel.empty:SetJustifyH("CENTER")
     panel.empty:SetTextColor(0.50, 0.56, 0.57, 1)
 
-    panel.previous = ChromeButton(panel, 24, 18, "<")
-    panel.previous:SetPoint("BOTTOMLEFT", 9, 7)
+    panel.previous = icons.Create(panel, "back", { size = 20, label = "Previous Page" })
+    panel.previous:SetPoint("BOTTOMLEFT", 9, 6)
     panel.previous:SetScript("OnClick", function() page = math.max(1, page - 1); API.Refresh() end)
-    panel.next = ChromeButton(panel, 24, 18, ">")
-    panel.next:SetPoint("BOTTOMRIGHT", -9, 7)
+    panel.next = icons.Create(panel, "next", { size = 20, label = "Next Page" })
+    panel.next:SetPoint("BOTTOMRIGHT", -9, 6)
     panel.next:SetScript("OnClick", function() page = page + 1; API.Refresh() end)
     panel.page = Text(panel, 8, "1 / 1")
     panel.page:SetPoint("BOTTOM", 0, 11)
@@ -387,6 +376,7 @@ function API.Refresh()
     panel.edge:SetVertexColor(ACCENT[1], ACCENT[2], ACCENT[3], .27)
     panel.rule:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], .15)
     panel.title:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3], 1)
+    local focusKey, focusName = API.GetFocus(), API.GetFocusName()
     local targets = Targets()
     local pageCount = math.max(1, math.ceil(#targets / ROWS_PER_PAGE))
     page = math.max(1, math.min(page, pageCount))
@@ -432,8 +422,8 @@ function API.Refresh()
     panel.page:SetText(page .. " / " .. pageCount)
     panel.previous:SetShown(pageCount > 1 and page > 1)
     panel.next:SetShown(pageCount > 1 and page < pageCount)
-    panel.clear:SetAlpha(focusKey and 1 or 0.48)
-    panel.subtitle:SetText(focusKey and ("Focused: " .. (focusName or "current vignette")) or "Choose one current detection")
+    panel.clear:Refresh()
+    panel.subtitle:SetText(focusKey and ("Focused: " .. (focusName or "current vignette")) or "Choose one detection")
 end
 
 function API.Toggle(anchor)
@@ -459,6 +449,15 @@ end
 function API.IsShown()
     return panel ~= nil and panel:IsShown() or false
 end
+
+-- Any view that changes the focused target redraws this list; a target that
+-- vanished from the list (validate) only refreshes it.
+addon.VignetteRadarFocus.OnChanged(function(_, current, previous, source)
+    local function Key(entry) return entry and entry.type == "target" and entry.key or nil end
+    local function Name(entry) return entry and entry.type == "target" and entry.name or nil end
+    if Key(current) == Key(previous) and Name(current) == Name(previous) then return end
+    if source == "validate" then API.Refresh() else NotifyChanged() end
+end)
 
 API.Testing = {
     GetPanel = function() return panel end,

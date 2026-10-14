@@ -1,4 +1,4 @@
-# Vignette Radar 0.1.0-dev.76
+# Magpie 0.1.0-dev.76
 
 This build adds 15 capabilities, fixes 15 failure paths, and polishes 15 interactions. It keeps the public base version at 0.1.0.
 

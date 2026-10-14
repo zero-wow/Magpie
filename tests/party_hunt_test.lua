@@ -1,18 +1,28 @@
 local path = arg[1] or "Routes/PartyHunt.lua"
 local addon = {}
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile(path))("VignetteRadar", addon)
 local PartyHunt = assert(addon.VignetteRadarPartyHunt)
 
+-- The real C_ChatInfo calls return enum numbers, not booleans.
+Enum = { SendAddonMessageResult = { Success = 0, AddonMessageThrottle = 3 },
+    RegisterAddonMessagePrefixResult = { Success = 0, DuplicatePrefix = 1,
+        InvalidPrefix = 2, MaxPrefixes = 3 } }
 local now, sent, callbacks = 100, {}, {}
 local group = "PARTY"
+local sendResult, registerResult, registerCalls = 0, 0, 0
 local transport = {
-    register = function(prefix) return prefix == PartyHunt.PREFIX end,
+    register = function(prefix)
+        registerCalls = registerCalls + 1
+        return prefix == PartyHunt.PREFIX and registerResult or 2
+    end,
     send = function(prefix, payload, channel)
         sent[#sent + 1] = { prefix, payload, channel }
-        return true
+        return sendResult
     end,
     isInParty = function() return group == "PARTY" end,
     isInRaid = function() return group == "RAID" end,
+    playerName = function() return "Me-Realm" end,
 }
 local settings = { receive = "party", shareSightings = false, shareStop = false,
     ignored = { ["ignored-realm"] = true } }
@@ -30,6 +40,9 @@ assert(service:PublishSighting(sighting, true) and #sent == 1 and sent[1][3] == 
     "opted-in sightings should send one party message")
 assert(not service:PublishSighting(sighting, true) and #sent == 1,
     "repeated clicks must respect the send cooldown")
+assert(registerCalls == 0, "publishing must not register the prefix every time")
+assert(not service:HandleMessage(sent[1][1], sent[1][2], "PARTY", "Me-Realm"),
+    "our own echoed message must be ignored")
 assert(service:HandleMessage(sent[1][1], sent[1][2], "PARTY", "Friend-Realm"),
     "a valid group report should be accepted")
 local reports = service:GetReports()
@@ -74,10 +87,18 @@ assert(service:HandleMessage(sent[#sent][1], sent[#sent][2], "RAID", "Raidmate-R
     "raid receive scope should accept a selected stop")
 assert(service:GetReports()[1].reportType == "stop", "the selected stop stays distinct from a sighting")
 
+now = now + 6
+sendResult = Enum.SendAddonMessageResult.AddonMessageThrottle
+local throttled, reason = service:PublishStop({ mapID = 2025, x = 0, y = 1, kind = "quest",
+    identity = "quest:98", name = "Throttled" }, true)
+assert(not throttled and reason == "local-only",
+    "a non-success send result must count as a failure")
+sendResult = 0
+
 group = nil
 service:OnGroupChanged()
 assert(#service:GetReports() == 0, "disconnecting must clear old reports")
-assert(not service:PublishSighting(sighting, true) and #sent == 2,
+assert(not service:PublishSighting(sighting, true) and #sent == 3,
     "outside a group the service must fall back to local-only")
 settings.receive = "off"
 service:SetSettings(settings)
@@ -93,11 +114,22 @@ CreateFrame = function()
 end
 settings.receive = "party"
 service:SetSettings(settings)
+registerResult = Enum.RegisterAddonMessagePrefixResult.MaxPrefixes
+combat = false
+assert(not service:Start() and registered == 0, "a failed prefix registration must not start")
+registerResult = Enum.RegisterAddonMessagePrefixResult.DuplicatePrefix
+combat = true
 assert(not service:Start() and registered == 0,
     "opt-in event registration must wait until combat lockdown ends")
 combat = false
 assert(service:Start() and registered == 2,
     "the service should start when a later safe event retries it")
+local calls = registerCalls
+settings.shareSightings = true
+group = "PARTY"
+now = now + 100
+assert(service:PublishSighting(sighting, true) and registerCalls == calls,
+    "an already registered prefix is not registered again on publish")
 combat = true
 settings.receive = "off"
 service:SetSettings(settings)

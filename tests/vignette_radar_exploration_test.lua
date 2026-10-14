@@ -1,6 +1,8 @@
 VignetteRadarDB, WaffleHouseDB = nil, nil
 local addon = {}
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile("Core/Core.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Focus.lua"))("VignetteRadar", addon)
 assert(loadfile("Routes/Exploration.lua"))("VignetteRadar", addon)
 local E, db = addon.VignetteRadarExploration, addon.GetSettings()
 local current = 0
@@ -144,6 +146,15 @@ player.worldX = 260
 assert(E.CheckApproach({target}, player, 10) == target,
     "approach alerts only when a watched target crosses the threshold")
 assert(E.CheckApproach({target}, player, 10) == nil)
+local unplaced = { key = "unplaced", name = "No position", worldY = 0 }
+assert(E.Watch(unplaced) and E.CheckApproach({ unplaced, target }, player, 10) == nil,
+    "a watched target without world coordinates must be skipped, not error")
+assert(E.CheckApproach({target}, { worldY = 0 }, 10) == nil,
+    "a player without world coordinates must not error")
+local longKey = { key = string.rep("k", 90), name = "Long key", worldX = 0, worldY = 0 }
+assert(E.Watch(longKey) and E.IsWatched(longKey),
+    "Watch and IsWatched must agree on the stored key")
+assert(not E.Watch(unplaced) and not E.Watch(longKey))
 assert(not E.Watch(target))
 
 db.vignetteRadarJournalEnabled = true

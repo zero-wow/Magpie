@@ -10,29 +10,8 @@ local activeMapID, initialized, previewing = nil, false, false
 local live, stale, recent, sessionIgnored = {}, {}, {}, {}
 local lastAlertAt = -math.huge
 
-local function IsSecret(value)
-    if type(issecretvalue) ~= "function" then return false end
-    local ok, secret = pcall(issecretvalue, value)
-    return not ok or secret == true
-end
-
-local function Field(value, key)
-    if value == nil or IsSecret(value) then return nil end
-    local ok, result = pcall(function() return value[key] end)
-    if not ok or IsSecret(result) then return nil end
-    return result
-end
-
-local function Number(value)
-    if IsSecret(value) or type(value) ~= "number" or value ~= value
-        or value == math.huge or value == -math.huge then return nil end
-    return value
-end
-
-local function String(value)
-    if IsSecret(value) or type(value) ~= "string" or value == "" then return nil end
-    return value
-end
+local IsSecret, Field = addon.Secret.IsSecret, addon.Secret.Field
+local Number, String = addon.Secret.Number, addon.Secret.Text
 
 local function Settings()
     return type(addon.GetSettings) == "function" and addon.GetSettings() or {}
@@ -392,7 +371,8 @@ function API.Update(targets, mapID, now, context)
                 stale[key] = nil
                 output[#output + 1] = target
                 if canAlert and not previous and identity and CategoryMayAlert(settings, target)
-                    and (not recent[identity] or now - recent[identity] >= cooldown) then
+                    and (not recent[identity] or now - recent[identity] >= cooldown)
+                    and (not addon.VignetteRadarAlertTiers or addon.VignetteRadarAlertTiers.Worth(target, settings)) then
                     candidates[#candidates + 1] = target
                 end
                 if not previous and identity then recent[identity] = now end

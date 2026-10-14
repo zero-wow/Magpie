@@ -38,6 +38,8 @@ addon.VignetteRadarPOIs = {
 }
 local now = 100
 GetTime = function() return now end
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Points.lua"))("VignetteRadar", addon)
 assert(loadfile("Data/SourceFusion.lua"))("VignetteRadar", addon)
 local fusion = addon.VignetteRadarSourceFusion
 local vector = function(x, y) return { x = x, y = y } end

@@ -1,0 +1,91 @@
+## Interface: 120000, 120001, 120005, 120105
+## Title: Magpie
+## Notes: Spots what is worth finding nearby and gets you there fast: rares, treasures, events, quests and map notes.
+## Author: Zero
+## Version: 0.1.0-dev.115
+## OptionalDeps: WaffleHouse_EllesmereUI, EllesmereUI, HandyNotes, ZygorGuidesViewer, WaypointUI
+## SavedVariables: VignetteRadarDB
+
+Core\Core.lua
+Core\Secret.lua
+Core\Bus.lua
+Core\Trace.lua
+Core\LayerBudget.lua
+Core\SpatialProjection.lua
+Core\Points.lua
+Core\Focus.lua
+Core\Travel.lua
+Core\Guidance.lua
+Core\Compass.lua
+Core\Themes.lua
+UI\Style.lua
+UI\Controls.lua
+UI\IconButton.lua
+Core\Schema.lua
+Core\Features.lua
+Core\Recent.lua
+Core\Declutter.lua
+Core\AlertTiers.lua
+Data\QuestData.lua
+Data\RouteQuests.lua
+Data\QuestService.lua
+Routes\RouteDraft.lua
+Routes\Exploration.lua
+Data\PackStore.lua
+Data\POIs.lua
+Data\SourceFusion.lua
+Data\AreaPOIs.lua
+Data\TreasureLearning.lua
+Data\OutcomeLearning.lua
+Data\RareSpawns.lua
+Data\LearnedTransfer.lua
+Data\Today.lua
+Data\CollectionLens.lua
+Data\CollectionTracking.lua
+Data\WarbandBoard.lua
+Data\ResetPlanner.lua
+Data\PhaseLens.lua
+Data\SurveyReplay.lua
+Routes\PartyHunt.lua
+Routes\ShareToGroup.lua
+Routes\SharedSightings.lua
+Routes\Expeditions.lua
+Routes\SoundCompass.lua
+Core\ContextDirector.lua
+Core\FeatureRuntime.lua
+Routes\WaypointStability.lua
+Routes\WorldFocus.lua
+Routes\ZoneSweep.lua
+Routes\WorldMarker.lua
+Routes\Way.lua
+Data\Zygor.lua
+Routes\Beacons.lua
+UI\Legend.lua
+UI\TargetPicker.lua
+UI\TurnSmoothing.lua
+UI\Atlas.lua
+UI\MapRoute.lua
+UI\PlayerTracker.lua
+UI\NameplateMarker.lua
+UI\Radar.lua
+UI\ConstellationData.lua
+UI\ConstellationTrail.xml
+UI\Constellation.lua
+UI\ConstellationSettings.lua
+UI\ExpeditionStudio.lua
+UI\SurveyParty.lua
+UI\Intelligence.lua
+UI\Options.lua
+UI\QuickConfig.lua
+UI\Tray.lua
+UI\ThemeEditor.lua
+UI\GuidePanel.lua
+UI\LeadTrail.lua
+UI\SpawnHeatmap.lua
+UI\HorizonRibbon.lua
+UI\QuestItemButton.lua
+UI\MinimapUnderlay.lua
+UI\ButtonTray.lua
+UI\QuestTracker.lua
+UI\TransferBox.lua
+# WoW loads Bindings.xml from the addon root automatically.

@@ -3,24 +3,16 @@ if type(addon) ~= "table" then return end
 
 local API = {}
 addon.VignetteRadarRecent = API
-local KILL_SECONDS, MAX_KILLS = 3600, 256
+-- Kills hide markers for KILL_SECONDS; they are kept for a day so
+-- Declutter can hide rares killed since the daily reset.
+local KILL_SECONDS, KEEP_SECONDS, MAX_KILLS = 3600, 86400, 256
 local questCache = {}
 
-local function Safe(value)
-    if type(issecretvalue) ~= "function" then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and secret ~= true
-end
+local Safe, Field, Integer = addon.Secret.Safe, addon.Secret.Field, addon.Secret.Integer
 
-local function Field(object, key)
-    if type(object) ~= "table" or not Safe(object) then return nil end
-    local ok, value = pcall(function() return object[key] end)
-    return ok and Safe(value) and value or nil
-end
-
+-- Positive whole numbers only (IDs and timestamps).
 local function Number(value)
-    return Safe(value) and type(value) == "number" and value > 0
-        and value < math.huge and value == math.floor(value) and value or nil
+    return Integer(value, 1)
 end
 
 local function Epoch()
@@ -46,7 +38,7 @@ end
 local function Prune(kills, now)
     local count = 0
     for key, at in pairs(kills) do
-        if type(at) ~= "number" or at > now or now - at >= KILL_SECONDS then
+        if type(at) ~= "number" or at > now or now - at >= KEEP_SECONDS then
             kills[key] = nil
         else
             count = count + 1
@@ -63,7 +55,10 @@ end
 
 function API.RecordNPCGuid(guid)
     local identity, now = GUIDIdentity(guid), Epoch()
-    if not (identity and now and addon.GetSettings().vignetteRadarHideCleared) then return false end
+    local settings = addon.GetSettings()
+    if not (identity and now and (settings.vignetteRadarHideCleared or settings.vignetteRadarDeclutter)) then
+        return false
+    end
     local kills = Kills()
     kills[identity] = now
     Prune(kills, now)
@@ -82,6 +77,7 @@ end
 function API.InvalidateQuests()
     questCache = {}
 end
+if addon.Bus then addon.Bus.On("QUEST_LOG_UPDATE", function() API.InvalidateQuests() end) end
 
 local function Completed(questID)
     if not (questID and C_QuestLog and type(C_QuestLog.IsQuestFlaggedCompleted) == "function") then
@@ -109,6 +105,11 @@ function API.IsHidden(item, settings)
     end
     local now = Epoch()
     if not now then return false end
+    return API.KilledWithin(item, KILL_SECONDS, now, settings)
+end
+
+-- The identities a kill can be recorded under for item.
+local function KillKeys(item)
     local keys = {}
     local npcID = Number(Field(item, "npcID"))
     if npcID then keys[#keys + 1] = "npc:" .. npcID end
@@ -118,12 +119,21 @@ function API.IsHidden(item, settings)
     if guidIdentity then keys[#keys + 1] = guidIdentity end
     local noteKey = Field(item, "key")
     if type(noteKey) == "string" then keys[#keys + 1] = "note:" .. noteKey end
+    return keys
+end
+
+-- True when item was recorded as killed or cleared within the last seconds,
+-- whatever the Hide Cleared switch says.
+function API.KilledWithin(item, seconds, now, settings)
+    now = now or Epoch()
+    if not (now and type(seconds) == "number" and seconds > 0) then return false end
     local kills = Kills(settings)
-    for _, key in ipairs(keys) do
+    if type(kills) ~= "table" then return false end
+    for _, key in ipairs(KillKeys(item)) do
         local at = kills[key]
         if type(at) == "number" then
-            if at <= now and now - at < KILL_SECONDS then return true end
-            kills[key] = nil
+            if at <= now and now - at < seconds then return true end
+            if at > now or now - at >= KEEP_SECONDS then kills[key] = nil end
         end
     end
     return false

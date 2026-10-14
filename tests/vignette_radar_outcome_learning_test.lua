@@ -17,6 +17,7 @@ C_QuestLog.IsQuestFlaggedCompleted = function()
 end
 time = function() return 1000 end
 UnitPosition = function() return 502, 500, 74, 42 end
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile("Data/OutcomeLearning.lua"))("VignetteRadar", addon)
 local learning = addon.VignetteRadarOutcomeLearning
 local rare = { key = "vignette-1", category = "rare", name = "Silvermaw",
@@ -26,6 +27,9 @@ local rare = { key = "vignette-1", category = "rare", name = "Silvermaw",
 local quest = { questID = 987, mapID = 123, mapX = .5, mapY = .5,
     worldX = 500, worldY = 500, instanceID = 42 }
 learning.Sync({ rare }, { quest })
+for key in pairs(rare) do
+    assert(not tostring(key):find("^_outcome"), "Sync must not write onto live radar targets")
+end
 assert(not learning.OnDeadVignette("unseen", {})
     and not db.vignetteRadarOutcomeLocations,
     "unseen or already-dead vignettes must not count as kills")

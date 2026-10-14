@@ -9,20 +9,13 @@ addon.VignetteRadarQuestData = API
 local stepCache, stepCacheCount, stepCacheMap = {}, 0, nil
 local startsCache, requestedMaps, startsCacheCount = {}, {}, 0
 local objectiveCache, objectiveCacheCount = {}, 0
+-- questID -> { at, text }; the route card asks for the hint five times a second.
+local hintCache, hintCacheCount = {}, 0
 local STEP_AGE, STARTS_AGE, MAX_STEPS, MAX_STARTS = 2, 5, 64, 80
 local MAX_CACHED_MAPS = 64
 
-local function IsSecret(value)
-    if not issecretvalue then return false end
-    local ok, secret = pcall(issecretvalue, value)
-    return not ok or secret == true
-end
-
-local function Number(value)
-    if IsSecret(value) or type(value) ~= "number" then return nil end
-    if value ~= value or value == math.huge or value == -math.huge then return nil end
-    return value
-end
+local IsSecret, Number = addon.Secret.IsSecret, addon.Secret.Number
+local Field, Call, SecretText = addon.Secret.Field, addon.Secret.Call, addon.Secret.Text
 
 local function ID(value)
     value = Number(value)
@@ -34,16 +27,9 @@ local function Position(value)
     return value and value >= 0 and value <= 1 and value or nil
 end
 
+-- Quest text is cut to fit rather than dropped.
 local function Text(value, limit)
-    if IsSecret(value) or type(value) ~= "string" or value == "" then return nil end
-    return value:sub(1, limit or 160)
-end
-
-local function Field(record, name)
-    if IsSecret(record) or type(record) ~= "table" then return nil end
-    local ok, value = pcall(function() return record[name] end)
-    if ok and not IsSecret(value) then return value end
-    return nil
+    return SecretText(value, limit or 160, true)
 end
 
 local function Now()
@@ -57,16 +43,6 @@ local function Copy(record)
     local result = {}
     for key, value in pairs(record) do result[key] = value end
     return result
-end
-
-local function Call(owner, name, ...)
-    if type(owner) ~= "table" then return nil end
-    local read, callback = pcall(function() return owner[name] end)
-    if not read or IsSecret(callback) then return nil end
-    if type(callback) ~= "function" then return nil end
-    local ok, a, b, c = pcall(callback, ...)
-    if not ok then return nil end
-    return a, b, c
 end
 
 local function ObjectiveLabelAndCount(label)
@@ -84,7 +60,14 @@ function API.Invalidate(reason)
     stepCache, stepCacheCount, stepCacheMap = {}, 0, nil
     startsCache, startsCacheCount = {}, 0
     objectiveCache, objectiveCacheCount = {}, 0
+    hintCache, hintCacheCount = {}, 0
     if reason ~= "quest" then requestedMaps = {} end
+end
+-- Quest and map events reach this cache through the bus, before the radar
+-- schedules its rescan (subscription order follows the TOC).
+if addon.Bus then
+    addon.Bus.On("MAP_CHANGED", function() API.Invalidate("map") end)
+    addon.Bus.On("QUEST_CHANGED", function() API.Invalidate("quest") end)
 end
 
 -- Quest objectives are read at most once per two seconds between quest events,
@@ -144,6 +127,47 @@ function API.GetObjectiveSummary(questID, hint)
         end
     end
     return Copy(first)
+end
+
+
+-- One line saying what to do next: Blizzard's route hint ("Take the portal
+-- to ...") while one applies, else the first unfinished objective.
+function API.GetNextStepLine(questID)
+    questID = ID(questID)
+    if not questID then return nil end
+    local now = Now()
+    local cached = hintCache[questID]
+    if not cached or now - cached.at >= STEP_AGE or now < cached.at then
+        if not cached and hintCacheCount >= MAX_STEPS then
+            hintCache, hintCacheCount = {}, 0
+        end
+        if not cached then
+            cached = {}
+            hintCache[questID] = cached
+            hintCacheCount = hintCacheCount + 1
+        end
+        cached.at = now
+        cached.text = Text(Call(C_QuestLog, "GetNextWaypointText", questID), 120) or false
+    end
+    local hint = cached.text
+    if hint and hint ~= "" then return hint, true end
+    local objective = API.GetObjectiveSummary(questID)
+    if not objective then return nil end
+    return objective.count and (objective.label .. " " .. objective.count) or objective.label, false
+end
+
+
+-- True while the player stands inside the quest's objective area: the
+-- quest's map blob, or the area of a bonus objective or world quest.
+function API.IsQuestInArea(questID)
+    questID = ID(questID)
+    if not questID then return false end
+    if Call(C_Minimap, "IsInsideQuestBlob", questID) == true then return true end
+    if type(GetTaskInfo) == "function" then
+        local ok, isInArea = pcall(GetTaskInfo, questID)
+        if ok and isInArea == true then return true end
+    end
+    return false
 end
 
 -- Returns a map point when Blizzard provides one and its separate instruction

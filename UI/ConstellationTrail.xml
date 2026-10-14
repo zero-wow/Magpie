@@ -1,0 +1,16 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+    <Frame name="VignetteRadarConstellationTrailTemplate" virtual="true">
+        <Layers>
+            <Layer level="ARTWORK">
+                <Line parentKey="Guide" thickness="1" />
+                <Line parentKey="Fill" thickness="4" hWrapMode="REPEAT" />
+            </Layer>
+        </Layers>
+        <Animations>
+            <AnimationGroup parentKey="Scroll" looping="REPEAT">
+                <TextureCoordTranslation parentKey="Move" childKey="Fill"
+                    duration="0.5" order="1" offsetU="-1" offsetV="0" />
+            </AnimationGroup>
+        </Animations>
+    </Frame>
+</Ui>

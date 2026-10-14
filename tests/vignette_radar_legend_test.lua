@@ -70,7 +70,6 @@ end
 UIParent = CreateFrame("Frame", "UIParent")
 UIParent:SetSize(1600, 900)
 STANDARD_TEXT_FONT = "fallback.ttf"
-EllesmereUI = { EXPRESSWAY = "native-eui-font.ttf" }
 local tooltipLines = {}
 GameTooltip = {
     SetOwner = function() tooltipLines = {} end,
@@ -85,6 +84,8 @@ local addon = {
     GetSettings = function() return settings end,
     RefreshVignetteRadar = function() refreshes = refreshes + 1 end,
 }
+assert(loadfile("UI/Style.lua"))("VignetteRadar", addon)
+assert(loadfile("UI/IconButton.lua"))("VignetteRadar", addon)
 assert(loadfile(sourcePath))("VignetteRadar", addon)
 
 local legend = assert(addon.VignetteRadarLegend, "legend module must publish its integration API")
@@ -144,11 +145,13 @@ assert(panel.mouseEnabled == true and panel.divider.height == 1,
     "legend surface must capture input and preserve a visible header gutter")
 assert(panel.point[1] == "TOPLEFT" and panel.point[3] == "TOPRIGHT" and panel.point[4] == 8,
     "legend must sit outside the radar with an explicit gutter")
-assert(panel.title.font[1] == EllesmereUI.EXPRESSWAY and panel.title.text == "RADAR LEGEND",
-    "legend must use native EllesmereUI typography")
+assert(panel.title.font[1] == addon.VignetteRadarStyle.Font() and panel.title.text == "LEGEND",
+    "legend must use the bundled monospace font")
 assert(panel.liveHint.text == "CLICK ROW TO SPOTLIGHT"
-    and panel.showHint.text == "SHOW" and panel.all.label.text == "CLEAR"
-    and panel.mapHeading.text == "MAP NOTES" and panel.mapToggle.label.text == "ON"
+    and panel.showHint.text == "SHOW" and panel.all.labelText == "Clear Spotlight"
+    and panel.all.icon == "refresh" and panel.mapToggle.icon == "eye"
+    and panel.mapHeading.text == "MAP NOTES" and panel.mapToggle.labelText == "Map Notes"
+    and panel.mapToggle._artState == 2
     and panel.otherHeading.text == "SYMBOL KEY · REFERENCE ONLY",
     "the legend must identify spotlightable rows, visibility switches, and reference-only symbols")
 assert(panel.mapHeading.point[4] + panel.mapHeading.width < panel.width - 9 - panel.mapToggle.width
@@ -166,11 +169,11 @@ for _, kind in ipairs({ "treasure", "mob", "item", "note", "entrance", "guide" }
         "map note entries must stay within the legend's visible gutters")
 end
 panel.mapToggle.scripts.OnClick(panel.mapToggle)
-assert(settings.vignetteRadarMapNotesVisible == false and panel.mapToggle.label.text == "OFF"
+assert(settings.vignetteRadarMapNotesVisible == false and panel.mapToggle._artState == 0
     and settings.vignetteRadarPOISource == "auto",
     "the legend switch should hide map-pack marks without losing the selected source")
 panel.mapToggle.scripts.OnClick(panel.mapToggle)
-assert(settings.vignetteRadarMapNotesVisible == true and panel.mapToggle.label.text == "ON",
+assert(settings.vignetteRadarMapNotesVisible == true and panel.mapToggle._artState == 2,
     "the same switch should restore saved map-pack marks")
 panel.mapNotes.treasure.scripts.OnClick(panel.mapNotes.treasure)
 assert(settings.vignetteRadarPOITypes.treasure == false
@@ -181,7 +184,7 @@ assert(settings.vignetteRadarPOITypes.treasure == true,
     "clicking the row again should restore that note type")
 assert(panel.mapCaption.text:find("saved, not live", 1, true)
     and panel.guides.quest.fill.width == 8
-    and panel.guides.quest.fill.texture == "Interface\\AddOns\\VignetteRadar\\Media\\quest-diamond.tga"
+    and panel.guides.quest.fill.texture == "Interface\\AddOns\\Magpie\\Media\\quest-diamond.tga"
     and panel.guides.area.fill.width == 11
     and panel.guides.pin and panel.guides.route.number.text == "1"
     and #panel.guides.trail.dots == 3 and #panel.guides.trail.marks == 3
@@ -366,7 +369,7 @@ assert(panel.mapNotes.treasure.alpha == 1 and panel.mapNotes.mob.alpha == .6
     and panel.rows.rare.swatch.texture == "Interface\\CharacterFrame\\TempPortraitAlphaMask"
     and panel.rows.treasure.swatch.texture == panel.rows.rare.swatch.texture,
     "guide and live symbols must track map filters, settings, and icon-free mode")
-addon.VignetteRadarStyle = { Color = function(slot)
+addon.VignetteRadarStyle = { SetFont = addon.VignetteRadarStyle.SetFont, Color = function(slot)
     if slot == "rare" then return .2, .3, .4 end
     if slot == "quest" then return .7, .6, .5 end
     return .8, .7, .6
@@ -401,7 +404,9 @@ assert(panel.rows.event.selection:IsShown() and panel.rows.event.focusCue:IsShow
     "the selected category needs an explicit spotlight cue")
 assert(panel.rows.event.alpha == 1 and panel.rows.other.alpha == 0.58,
     "the selected row must remain strong while nonfocused enabled rows are dimmed")
+assert(panel.all._artState == 2, "Clear Spotlight is underlined while a spotlight is on")
 panel.all.scripts.OnClick(panel.all)
+assert(panel.all._artState == 0, "Clear Spotlight drops its underline once cleared")
 assert(settings.vignetteRadarHighlight == nil and not panel.rows.event.focusCue:IsShown()
     and panel.status.text == "SPOTLIGHT OFF · SHOWN TYPES EQUAL",
     "CLEAR must remove the spotlight while preserving visibility filters")
@@ -449,14 +454,14 @@ assert(questPanel.rows[1].name.text == "Quest 1"
     and questPanel.rows[1].fill.vertexColor[2] == 179/255 * .18
     and questPanel.rows[1].fill.vertexColor[3] == 87/255 * .18,
     "unfinished quest diamonds need a tinted center matching the radar palette")
-assert(questPanel.rows[1].rim.texture == "Interface\\AddOns\\VignetteRadar\\Media\\quest-diamond-hollow.tga"
+assert(questPanel.rows[1].rim.texture == "Interface\\AddOns\\Magpie\\Media\\quest-diamond-hollow.tga"
     and math.abs(questPanel.rows[1].rim.width - 13 * 26 / 30) < .001
     and questPanel.rows[1].fill:IsShown()
     and questPanel.rows[1].number.font[3] == "OUTLINE",
     "the quest key must show an unfinished quest with a hollow diamond")
 entries[1].completed = true
 legend.SetQuestEntries(entries)
-assert(questPanel.rows[1].rim.texture == "Interface\\AddOns\\VignetteRadar\\Media\\quest-diamond.tga"
+assert(questPanel.rows[1].rim.texture == "Interface\\AddOns\\Magpie\\Media\\quest-diamond.tga"
     and questPanel.rows[1].rim.width == 13
     and questPanel.rows[1].fill:IsShown(),
     "the quest key must use a solid diamond for a complete quest")
@@ -474,14 +479,22 @@ assert(legend.ToggleQuest(questAnchor) == false and not legend.IsQuestShown(),
     "quest key toggle must close an open key")
 
 -- Validate fallback behavior without native EllesmereUI helpers or fonts.
-EllesmereUI = nil
 methods.SetAtlas = nil
 local fallbackSettings = {}
 local fallbackAddon = { GetSettings = function() return fallbackSettings end }
+assert(loadfile("UI/Style.lua"))("VignetteRadar", fallbackAddon)
+assert(loadfile("UI/IconButton.lua"))("VignetteRadar", fallbackAddon)
+-- The bundled font file fails to load: every label must drop back to the client font.
+local bundledSetFont = methods.SetFont
+methods.SetFont = function(self, path, ...)
+    if tostring(path):find("JetBrainsMono", 1, true) then return false end
+    return bundledSetFont(self, path, ...)
+end
 assert(loadfile(sourcePath))("VignetteRadar", fallbackAddon)
 assert(fallbackAddon.VignetteRadarLegend.Toggle(anchor), "legend must build without EllesmereUI helper functions")
 assert(fallbackAddon.VignetteRadarLegend.Testing.GetPanel().title.font[1] == STANDARD_TEXT_FONT,
-    "helper-free mode must use the standard client font")
+    "a font that fails to load must fall back to the standard client font")
+methods.SetFont = bundledSetFont
 assert(fallbackAddon.VignetteRadarLegend.Testing.GetPanel().rows.treasure.swatch.texture
     == "Interface\\CharacterFrame\\TempPortraitAlphaMask"
     and fallbackAddon.VignetteRadarLegend.Testing.GetPanel().rows.treasure.swatch.vertexColor[1] == 1,

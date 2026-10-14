@@ -3,7 +3,7 @@ local legendSourcePath = arg[2] or "UI/Legend.lua"
 local targetPickerSourcePath = arg[3] or "UI/TargetPicker.lua"
 local optionsSourcePath = arg[4] or "UI/Options.lua"
 local quickSourcePath = arg[5] or "UI/QuickConfig.lua"
-unpack = table.unpack
+unpack = table.unpack or unpack
 
 local objects = {}
 local methods = {}
@@ -115,6 +115,7 @@ function methods:SetFontString(value) self.fontString = value end
 function methods:SetText(value) self.text = value; if self.fontString then self.fontString:SetText(value) end end
 function methods:SetTextColor(...) self.textColor = { ... } end
 function methods:SetJustifyH(value) self.justifyH = value end
+function methods:SetJustifyV(value) self.justifyV = value end
 function methods:SetWordWrap(value) self.wordWrap = value end
 function methods:IsShown() return self.shown == true end
 function methods:SetShown(value) if value then self:Show() else self:Hide() end end
@@ -192,7 +193,11 @@ C_VignetteInfo = {
         if key == "rare" then return 3, 5 end
     end,
 }
-C_Texture = { GetAtlasInfo = function(name) return name == "VignetteLoot" and {} or nil end }
+-- The client's atlases: Blizzard's vignette and quest icons exist, anything else is missing.
+local knownAtlases = { VignetteLoot = true, VignetteLootElite = true, VignetteKill = true,
+    VignetteKillElite = true, VignetteEvent = true, VignetteEventElite = true, QuestTurnin = true,
+    QuestNormal = true, ["Quest-Campaign-Available"] = true, ["Worldquest-icon"] = true }
+C_Texture = { GetAtlasInfo = function(name) return knownAtlases[name] and {} or nil end }
 GetPlayerFacing = function() return 0 end
 issecretvalue = function() return false end
 
@@ -200,7 +205,7 @@ EllesmereUI = nil
 local openedCategory, registeredCategory
 Settings = {
     RegisterCanvasLayoutCategory = function(frame, name)
-        assert(frame.name == name and name == "Vignette Radar", "standalone options category needs the addon name")
+        assert(frame.name == name and name == "Magpie", "standalone options category needs the addon name")
         return { GetID = function() return 517 end }
     end,
     RegisterAddOnCategory = function(category) registeredCategory = category end,
@@ -211,12 +216,22 @@ local settings = { vignetteRadarEnabled = true, vignetteRadarHideWhenEmpty = tru
     vignetteRadarRange = 450, vignetteRadarCircleOnly = false }
 local addon = { GetSettings = function() return settings end }
 VignetteRadarDB = settings
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Bus.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Points.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Guidance.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Compass.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Focus.lua"))("VignetteRadar", addon)
 assert(loadfile("Core/Core.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Themes.lua"))("VignetteRadar", addon)
 assert(loadfile("UI/Style.lua"))("VignetteRadar", addon)
 assert(loadfile("UI/Controls.lua"))("VignetteRadar", addon)
+assert(loadfile("UI/IconButton.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Schema.lua"))("VignetteRadar", addon)
 assert(loadfile("Core/Features.lua"))("VignetteRadar", addon)
 assert(loadfile("Core/Recent.lua"))("VignetteRadar", addon)
 assert(loadfile("Data/QuestData.lua"))("VignetteRadar", addon)
+assert(loadfile("Data/QuestService.lua"))("VignetteRadar", addon)
 assert(loadfile("Routes/RouteDraft.lua"))("VignetteRadar", addon)
 assert(loadfile("Routes/Exploration.lua"))("VignetteRadar", addon)
 assert(loadfile("Data/POIs.lua"))("VignetteRadar", addon)
@@ -250,8 +265,11 @@ do
         and not turn.UpdateRadar(radar, math.pi / 2),
         "the existing turn pass should smooth straight-line movement without a new update loop")
 end
+assert(loadfile("UI/Tray.lua"))("VignetteRadar", addon)
+-- The Guide Panel uses the panel helper; the legend tests below run without a tray.
+addon.VignetteRadarTrayForRouteCard, addon.VignetteRadarTray = addon.VignetteRadarTray, nil
 assert(loadfile(sourcePath))("VignetteRadar", addon)
-assert(loadfile("Routes/RouteArrow.lua"))("VignetteRadar", addon)
+assert(loadfile("UI/GuidePanel.lua"))("VignetteRadar", addon)
 assert(loadfile(optionsSourcePath))("VignetteRadar", addon)
 assert(loadfile(quickSourcePath))("VignetteRadar", addon)
 
@@ -286,28 +304,13 @@ optionsEvent.scripts.OnEvent(optionsEvent)
 -- Exercise legacy layout geometry through the compatibility API as well as
 -- the finalized default radar tested separately below.
 settings.vignetteRadarCircleOnly = false
-local optionsPanel = assert(_G.VignetteRadarOptionsPanel, "standalone addon needs a populated settings panel")
-assert(optionsPanel.width == 520 and optionsPanel.height == 365 and registeredCategory,
-    "standalone options must fit the Settings canvas without EllesmereUI")
-local toggles, lowerRange
-toggles = {}
-for _, object in ipairs(objects) do
-    if object.parent == optionsPanel.pages.Radar and object.kind == "CheckButton" then
-        toggles[#toggles + 1] = object
-    elseif object.parent == optionsPanel.pages.Radar and object.text == "-" then
-        lowerRange = object
-    end
-end
-assert(#toggles == 6 and lowerRange, "standalone options must expose visibility, data scope, clearing, empty-state help, and range controls")
-for _, expected in ipairs({ 300, 150, 100, 50, 25, 10 }) do
-    lowerRange.scripts.OnClick(lowerRange)
-    assert(settings.vignetteRadarRange == expected, "range controls must include close zoom steps")
-end
-assert(lowerRange.enabled == false,
-    "range controls must update saved settings and stop at the smallest range")
-settings.vignetteRadarRange = 450
+local optionsPanel = assert(_G.VignetteRadarOptionsPanel, "standalone addon needs a Blizzard settings entry")
+assert(registeredCategory and optionsPanel.openButton and optionsPanel.pages == nil,
+    "the Blizzard canvas must only point to the radar's own settings window")
 SlashCmdList.VIGNETTERADAR("config")
-assert(openedCategory == 517, "config command must open the standalone AddOns settings category")
+assert(addon.VignetteRadarQuickConfig.IsShown() and openedCategory == nil,
+    "config command must open the radar's own settings window")
+addon.VignetteRadarQuickConfig.Hide()
 
 settings.vignetteRadarEnabled = false
 settings.vignetteRadarScale = 1.35
@@ -346,7 +349,7 @@ assert(panel.drag.width == 106 and panel.target.point[1] == "TOPRIGHT"
     and panel.legend.point[1] == "TOPRIGHT" and panel.minimize.point[1] == "TOPRIGHT"
     and panel.close.point[1] == "TOPRIGHT",
     "drag target must stop before the focus, legend, minimize, and close controls")
-assert(panel.title.font[1] == STANDARD_TEXT_FONT, "radar must work with the standard client font")
+assert(panel.title.font[1] == addon.VignetteRadarStyle.Font(), "radar text must use the bundled monospace font")
 assert(panel.summary.text == "PREVIEW" and #panel.blips == 4,
     "preview must explicitly show rare, boss, treasure, and event samples")
 local firstBlip, secondBlip = panel.blips[1], panel.blips[2]
@@ -446,10 +449,13 @@ now, guids = 101, { "rare", "treasure" }
 addon.VignetteRadarAPI.Refresh(true)
 local rareBlip = assert(panel.blipByKey.rare)
 assert(#sounds == 0 and rareBlip.target.newUntil > now, "default detection alerts must pulse silently")
-assert(rareBlip.dot.texture:find("Skull", 1, true) and panel.blipByKey.treasure.dot.atlas == "VignetteLoot",
-    "live rares and treasures must use familiar skull and chest imagery")
+assert(rareBlip.dot.atlas == "VignetteKill" and panel.blipByKey.treasure.dot.atlas == "VignetteLoot"
+    and rareBlip.dot.vertexColor[1] == 1 and rareBlip.dot.vertexColor[2] == 1,
+    "live rares and treasures must use Blizzard's own untinted vignette icons")
 rareBlip.scripts.OnEnter(rareBlip)
-assert(GameTooltip.text == liveInfo.rare.name and #GameTooltip.lines <= 4
+-- (The Worth-It facts line comes from Core/Guidance.lua.)
+assert(GameTooltip.text == liveInfo.rare.name and #GameTooltip.lines <= 5
+    and table.concat(GameTooltip.lines, " | "):find("Health 42%", 1, true)
     and GameTooltip.lines[1]:find("Rare ·", 1, true)
     and GameTooltip.lines[#GameTooltip.lines] == "Click to Focus"
     and not table.concat(GameTooltip.lines, " | "):find("Shift-click", 1, true)
@@ -469,7 +475,8 @@ assert(panel.focusCard:IsShown() and panel.focusCard.name.text == liveInfo.rare.
     "radar-only focus needs a readable external card and a Show All control")
 assert(panel.focusCard.statusSurface and #panel.focusCard.statusSurface.face == 9
     and #panel.focusCard.statusSurface.edge == 9 and not panel.focusCard.accent
-    and not panel.focusCard.clear and panel.focusCard.showAll.face
+    and not panel.focusCard.clear and panel.focusCard.showAll.icon == "eye"
+    and panel.focusCard.showAll.labelText == "Show All"
     and panel.focusCard.detail.text:find("Rare ·", 1, true)
     and panel.focusCard.showAll.point[1] == "BOTTOMRIGHT"
     and panel.focusCard.width - 9 - panel.focusCard.showAll.width >= 8,
@@ -645,16 +652,16 @@ Enum = { QuestTagType = { WorldBoss = 99 } }
 C_QuestLog = { GetQuestTagInfo = function(id)
     return id == 700 and { worldQuestType = Enum.QuestTagType.WorldBoss } or nil
 end }
-liveInfo.boss = { name = "World boss", atlasName = "Unclassified", rewardQuestID = 700, vignetteID = 700, onMinimap = true }
+liveInfo.boss = { name = "World boss", atlasName = "VignetteKillElite", rewardQuestID = 700, vignetteID = 700, onMinimap = true }
 livePositions.boss = { x = 0.55, y = 0.55 }
 now, guids = 281, { "boss", "rare" }
 addon.VignetteRadarAPI.Refresh(true)
 local bossBlip = assert(panel.blipByKey.boss)
 rareBlip = assert(panel.blipByKey.rare)
 assert(bossBlip.target.isWorldBoss and bossBlip.target.category == "rare"
-    and bossBlip.dot.width > rareBlip.dot.width and bossBlip.dot.vertexColor[1] == 1
-    and bossBlip.dot.vertexColor[2] < 0.3 and rareBlip.dot.vertexColor[3] == 1,
-    "confirmed world bosses must have larger red skulls distinct from silver-blue rares")
+    and bossBlip.dot.width > rareBlip.dot.width and bossBlip.dot.atlas == "VignetteKillElite"
+    and rareBlip.dot.atlas == "VignetteKill",
+    "confirmed world bosses must have larger elite icons distinct from rares")
 assert(launcher.rangeLabel.text == "BOSS" and launcher.bosses == 1,
     "a nearby confirmed boss must have a plain-language launcher cue")
 bossBlip.scripts.OnClick(bossBlip, "LeftButton")
@@ -753,7 +760,7 @@ assert(panel.trailToggle.backdrop == nil and #panel.trailToggle.strokes == 12
     and panel.trailToggle.glow and panel.trailToggle.clickButtons[2] == "RightButtonUp",
     "the trail shortcut must match the toolbar and accept a style-changing right click")
 assert(panel.routeToggle.backdrop == nil and panel.routeToggle.art.texture
-        == "Interface\\AddOns\\VignetteRadar\\Media\\radar-corner-controls.tga"
+        == "Interface\\AddOns\\Magpie\\Media\\radar-corner-controls.tga"
     and not panel.routeToggle.glow:IsShown()
     and panel.routeToggle.clickButtons[2] == "RightButtonUp",
     "Auto Route must use the shared themed icon states and accept a right-click")
@@ -763,8 +770,17 @@ function CornerTool(id)
     end
 end
 local routeHover = assert(CornerTool("route"))
+assert(settings.vignetteRadarAdvancedTools == false
+    and not CornerTool("constellation").advancedTool and CornerTool("player").advancedTool,
+    "Advanced Tools corner controls must stay hidden while the switch is off")
+settings.vignetteRadarAdvancedTools = true
+addon.InvalidateSettings()
+addon.VignetteRadarAPI.Refresh(true)
+assert(CornerTool("constellation"):IsShown(),
+    "the constellation button must remain available on the normal radar frame")
 assert(routeHover.toolID == "route" and routeHover.artColumn == 10
-    and routeHover.art.texture == panel.routeToggle.art.texture
+    and routeHover.glyphName == "corner_route" and routeHover.iconLayers
+    and CornerTool("eye").glyphName == "corner_eye" and CornerTool("player").glyphName == "corner_player"
     and CornerTool("eye").artColumn == 7 and CornerTool("player").artColumn == 8,
     "Route, eye, and Player Tracker must use their intended cells in the shared icon atlas")
 do
@@ -790,10 +806,11 @@ do
         IsExpanded = function() return toggles % 2 == 1 end,
     }
     local button = assert(CornerTool("tracker"))
-    assert(button.artColumn == 11 and button.art.texture == routeHover.art.texture,
+    assert(button.artColumn == 11 and button.art.texture == routeHover.art.texture
+        and button.glyphName == "corner_tracker",
         "the Quest Tracker button must use the matching corner-control artwork")
     button.scripts.OnClick(button, "LeftButton")
-    assert(toggles == 1 and button.art.texCoord[3] > .5,
+    assert(toggles == 1 and button._artState >= 2,
         "the radar control must open the tray and show its selected state")
     addon.VignetteRadarQuestTracker = tracker
     panel.RefreshCornerTools()
@@ -804,9 +821,9 @@ do
     assert(panel.routeToggle.art.texCoord[3] ~= normalState,
         "the framed Auto Route icon must use its hover artwork")
     panel.routeToggle.scripts.OnLeave(panel.routeToggle)
-    local cornerState = routeHover.art.texCoord[3]
+    local cornerState = routeHover._artState
     routeHover.scripts.OnEnter(routeHover)
-    assert(routeHover.art.texCoord[3] ~= cornerState,
+    assert(routeHover._artState ~= cornerState and routeHover.iconLayers.glow.vertexColor[4] > 0,
         "the radar-only Auto Route icon must use the same hover-state family")
     routeHover.scripts.OnLeave(routeHover)
 end
@@ -849,7 +866,7 @@ end
 do
     panel.routeToggle.scripts.OnClick(panel.routeToggle, "RightButton")
     local chooser = assert(_G.VignetteRadarRouteChooserPopup)
-    assert(chooser:IsShown() and chooser.width == 248 and chooser.height == 263
+    assert(chooser:IsShown() and chooser.width == 326 and chooser.height == 263
         and chooser.clamped and chooser.point[2] == panel.routeToggle
         and chooser.choices.rare and chooser.choices.treasure and chooser.choices.quest
         and chooser.choices.zygor and chooser.choices.previous and chooser.choices.next
@@ -1094,12 +1111,7 @@ for _, name in ipairs({ "squat", "compact", "classic", "compact", "squat", "clas
     panel.legend.scripts.OnClick(panel.legend)
     assert(legendPanel:IsShown())
     local before = scanCount
-    local choice
-    for _, object in ipairs(objects) do
-        if object.parent == optionsPanel.pages.Layout and object.kind == "Button"
-            and object.text:lower() == name then choice = object; break end
-    end
-    assert(choice).scripts.OnClick(choice)
+    assert(addon.SetVignetteRadarLayout(name))
     assert(panel == originalPanel and panel.field == originalField and scanCount == before,
         "view changes must reuse existing frames without rescanning detection data")
     assert(settings.vignetteRadarLayout == name and panel.layout == name and not legendPanel:IsShown(),
@@ -1230,6 +1242,17 @@ for _, object in ipairs(objects) do
     if object.optionKey == "vignetteRadarNorthUp" then northOption = object; break end
 end
 assert(northOption, "north-up must also be available in Layout settings")
+-- QuickConfig syncs its checkboxes whenever it is shown.
+local function NorthOptionChecked()
+    local quick = addon.VignetteRadarQuickConfig
+    local wasShown = quick.IsShown()
+    quick.Refresh()
+    if not wasShown then
+        quick.OpenPage("Layout")
+        quick.Hide()
+    end
+    return northOption.checked
+end
 local function near(actual, expected, message)
     assert(math.abs(actual - expected) < 0.001,
         message .. ": got " .. tostring(actual) .. ", expected " .. tostring(expected))
@@ -1265,7 +1288,7 @@ for _, name in ipairs({ "classic", "squat", "compact" }) do
         "heading-up player cue must stay visible")
     local before = scanCount
     panel.compass.scripts.OnClick(panel.compass)
-    assert(settings.vignetteRadarNorthUp and panel.compass._selected and northOption.checked
+    assert(settings.vignetteRadarNorthUp and panel.compass._selected and NorthOptionChecked()
         and panel.compass.glow.vertexColor[4] >= .12
         and scanCount == before, "compass click must save north-up and sync options without rescanning")
     local miniX, miniY = launcher.miniBlips[1].point[4], launcher.miniBlips[1].point[5]
@@ -1309,7 +1332,7 @@ for _, name in ipairs({ "classic", "squat", "compact" }) do
     end
     checkLayout(true)
     panel.compass.scripts.OnClick(panel.compass)
-    assert(not settings.vignetteRadarNorthUp and not panel.compass._selected and not northOption.checked,
+    assert(not settings.vignetteRadarNorthUp and not panel.compass._selected and not NorthOptionChecked(),
         "clicking compass again must restore facing-up and synchronize the checkbox")
     near(panel.edgeArrow.point[4], panel.plotRadius, "restoring facing-up must rotate the focused edge arrow")
     assert(launcher.direction:IsShown() and launcher.chevron[1]:IsShown()
@@ -1449,7 +1472,7 @@ addon.VignetteRadarAPI.Refresh(true)
 local questDot = assert(panel.questDots[1], "quest locations must create a distinct dot")
 assert(questDot.halo and questDot.halo:IsShown() and questDot.halo.parent == panel.questClip
     and questDot.halo.level < questDot.level and questDot.halo:GetWidth() == 20
-    and questDot.rim.texture == "Interface\\AddOns\\VignetteRadar\\Media\\quest-diamond-hollow.tga"
+    and questDot.rim.texture == "Interface\\AddOns\\Magpie\\Media\\quest-diamond-hollow.tga"
     and math.abs(questDot.rim.width - 13 * 26 / 30) < .001
     and questDot.fill:IsShown()
     and questDot.fill.vertexColor[1] < .25,
@@ -1461,10 +1484,10 @@ for _, object in ipairs(objects) do
         break
     end
 end
-assert(questDot.quest.completed and questDot.rim.texture == "Interface\\AddOns\\VignetteRadar\\Media\\quest-diamond.tga"
-    and questDot.rim.width == 13
-    and questDot.fill:IsShown(),
-    "a quest ready to turn in must use a solid diamond")
+assert(questDot.quest.completed and questDot.rim.atlas == "QuestTurnin"
+    and questDot.rim.vertexColor[1] == 1 and not questDot.fill:IsShown()
+    and questDot.number.text == "",
+    "a quest ready to turn in must use Blizzard's turn-in icon")
 completedQuestIDs[12345] = nil
 for _, object in ipairs(objects) do
     if object.events and object.events.QUEST_LOG_UPDATE then
@@ -1487,7 +1510,7 @@ questDot.scripts.OnLeave(questDot)
 assert(questDot:IsShown() and questDot.quest.questID == 12345 and questDot.point[4] > 0
     and panel.summary.text == "1 QUEST IN RANGE", "quest dots should show live positions and a readable count")
 assert(panel.questBlob and not panel.questBlob:IsShown(), "exact blobs must wait for north-up mode")
-assert(panel.squarePlot and panel.field.background.texture == "Interface\\AddOns\\VignetteRadar\\Media\\radar-rounded-square.tga",
+assert(panel.squarePlot and panel.field.background.texture == "Interface\\AddOns\\Magpie\\Media\\radar-rounded-square.tga",
     "enabling quest areas must select a stable square surface even before blobs are available")
 local savedQuestCursor, savedFieldLeft, savedFieldTop = GetCursorPosition, panel.field.left, panel.field.top
 panel.field.left, panel.field.top = 0, panel.field:GetHeight()
@@ -1840,28 +1863,29 @@ for _, layoutName in ipairs({ "classic", "compact", "squat" }) do
     assert(#panel.hoverTools >= 15 and CornerTool("route") == routeHover
         and CornerTool("arrow").reference == panel.arrowToggle
         and CornerTool("clear").reference == panel.clearToggle
-        and panel.hoverTools[#panel.hoverTools - 1].toolID == "minimize"
-        and panel.hoverTools[#panel.hoverTools - 1].artColumn == 14
-        and panel.hoverTools[#panel.hoverTools].toolID == "close"
+        and panel.hoverTools[#panel.hoverTools].toolID == "minimize"
+        and panel.hoverTools[#panel.hoverTools].artColumn == 14
+        and CornerTool("close") == nil
         and panel.hoverTools[1]:IsShown()
         and not panel.settingsDot:IsShown(),
         "square radar-only view must reveal its corner controls on hover")
     assert(panel.hoverTools[1].glow == nil
         and panel.hoverTools[1].art.texture
-            == "Interface\\AddOns\\VignetteRadar\\Media\\radar-corner-controls.tga"
+            == "Interface\\AddOns\\Magpie\\Media\\button-icons.tga"
+        and panel.hoverTools[1].iconLayers.plate.texture == panel.hoverTools[1].art.texture
         and panel.zoomIn.glow.texture
-            == "Interface\\AddOns\\VignetteRadar\\Media\\control-rounded-square.tga",
+            == "Interface\\AddOns\\Magpie\\Media\\control-rounded-square.tga",
         "corner controls must use state artwork instead of a separate glow and glyph stack")
     local configTool = panel.hoverTools[1]
-    local normalRow = configTool.art.texCoord[3]
+    local normalRow = configTool._artState
     configTool.scripts.OnEnter(configTool)
-    assert(configTool.art.texCoord[3] > normalRow and configTool.art.texCoord[3] < .5,
-        "hover must select the dedicated highlighted image")
+    assert(configTool._artState == normalRow + 1 and configTool.iconLayers.glow.vertexColor[4] > 0,
+        "hover must light the hover glow layer")
     configTool.scripts.OnLeave(configTool)
-    assert(configTool.art.texCoord[3] == normalRow,
-        "mouse leave must restore the normal image")
-    assert(CornerTool("north").art.texCoord[3] > .5,
-        "north-up must use an on image distinct from the normal state")
+    assert(configTool._artState == normalRow and configTool.iconLayers.glow.vertexColor[4] == 0,
+        "mouse leave must restore the normal look")
+    assert(CornerTool("north")._artState >= 2 and CornerTool("north").iconLayers.underline.vertexColor[4] > .9,
+        "north-up must show the active mark")
     local side, center = panel.field:GetWidth(), panel.field:GetWidth() / 2
     local occupied = {}
     for _, tool in ipairs(panel.hoverTools) do
@@ -1922,7 +1946,7 @@ for _, name in ipairs({ "classic", "compact", "squat" }) do
     local borderPoint = assert(border.point, "rounded border texture needs an explicit center anchor")
     local borderBounds, faceBounds = bounds(border), bounds(panel.field.background)
     assert(border.kind == "Texture" and border.parent == panel.field and border.layer == "BORDER"
-        and border.texture == "Interface\\AddOns\\VignetteRadar\\Media\\radar-rounded-border.tga"
+        and border.texture == "Interface\\AddOns\\Magpie\\Media\\radar-rounded-border.tga"
         and borderPoint[1] == "CENTER" and borderPoint[2] == panel.field
         and borderPoint[3] == "CENTER" and (borderPoint[4] or 0) == 0 and (borderPoint[5] or 0) == 0
         and border.width == panel.field.background.width and border.height == panel.field.background.height
@@ -2018,7 +2042,7 @@ assert(not panel.squarePlot and panel.field.background.texture == "Interface\\Ch
     and panel.frameToggle.width == 16 and panel.questBlob == originalBlob,
     "disabling quest areas must restore the original circular face without replacing the blob renderer")
 assert(panel.hoverTools[1].art.texture
-        == "Interface\\AddOns\\VignetteRadar\\Media\\radar-corner-controls.tga"
+        == "Interface\\AddOns\\Magpie\\Media\\button-icons.tga"
     and panel.zoomIn.glow.texture == "Interface\\CharacterFrame\\TempPortraitAlphaMask",
     "circular view must restore circular main controls while keeping corner art ready")
 settings.vignetteRadarQuestAreas = true
@@ -2110,6 +2134,48 @@ do
         "the coalesced quest scan should refresh the latest objective geometry")
     C_Timer.After = savedAfter
 end
+do
+    local savedAfter, pendingScan = C_Timer.After, {}
+    C_Timer.After = function(delay, callback)
+        pendingScan[#pendingScan + 1] = { delay = delay, callback = callback }
+    end
+    local before = scanCount
+    for _ = 1, 4 do questEvents.scripts.OnEvent(questEvents, "VIGNETTE_MINIMAP_UPDATED") end
+    questEvents.scripts.OnEvent(questEvents, "VIGNETTES_UPDATED")
+    assert(#pendingScan == 1 and pendingScan[1].delay == 0 and scanCount == before,
+        "a burst of vignette events in one frame must queue a single scan")
+    pendingScan[1].callback()
+    assert(scanCount == before + 1, "the queued vignette scan must run exactly once")
+    questEvents.scripts.OnEvent(questEvents, "VIGNETTE_MINIMAP_UPDATED")
+    assert(#pendingScan == 2, "a later vignette event must queue a fresh scan")
+    pendingScan[2].callback()
+    C_Timer.After = nil
+    before = scanCount
+    questEvents.scripts.OnEvent(questEvents, "VIGNETTE_MINIMAP_UPDATED")
+    assert(scanCount == before + 1, "without C_Timer vignette events must still scan at once")
+    C_Timer.After = savedAfter
+end
+do
+    local savedCycle, savedOpenPage = VignetteRadar_CycleWorldFocus, addon.VignetteRadarQuickConfig.OpenPage
+    local cycled, openedPage = {}, nil
+    VignetteRadar_CycleWorldFocus = function(direction) cycled[#cycled + 1] = direction end
+    addon.VignetteRadarQuickConfig.OpenPage = function(name) openedPage = name end
+    SlashCmdList.VIGNETTERADAR("focus next")
+    SlashCmdList.VIGNETTERADAR("focus previous")
+    SlashCmdList.VIGNETTERADAR("focus")
+    assert(cycled[1] == 1 and cycled[2] == -1 and openedPage == "World Focus",
+        "/vr focus commands must reach World Focus")
+    VignetteRadar_CycleWorldFocus, addon.VignetteRadarQuickConfig.OpenPage = savedCycle, savedOpenPage
+end
+do
+    local api = addon.VignetteRadarAPI
+    local first = api.GetSelectableTargets()
+    assert(api.GetSelectableTargets() == first,
+        "selectable targets should be built once per frame")
+    api.InvalidateSpatialSnapshot()
+    assert(api.GetSelectableTargets() ~= first,
+        "a spatial change must rebuild selectable targets in the same frame")
+end
 shapeVersion = 5
 questEvents.scripts.OnEvent(questEvents, "TASK_PROGRESS_UPDATE")
 assert(panel.questBlob.renderedShape == "12345:5",
@@ -2174,17 +2240,131 @@ settings.vignetteRadarBeaconsEnabled = true
 addon.VignetteRadarAPI.Refresh(true)
 panel.settingsDot.scripts.OnClick(panel.settingsDot)
 local quick = assert(addon.VignetteRadarQuickConfig.GetPanel())
-assert(quick:IsShown() and quick.width == 288 and quick.height == 432
-    and not quick.rail, "the settings dot must open a panel without a left edge rail")
-assert(quick.tabs.Radar.backdrop == nil
-    and quick.tabs.Radar.face.texture == "Interface\\Buttons\\WHITE8X8"
-    and quick.tabs.Radar.edge.height == 1 and quick.find.width == 44,
-    "settings buttons need quiet flat artwork and an untruncated Find control")
-assert(quick.pages.Status and quick.pages.Search and quick.pages.Beacons
-    and quick.pages["World Focus"] and quick.pages["Auto Route"]
-    and quick.pages["Quest Routing"] and quick.pages.Performance
-    and quick.pages.Tools and quick.pages["Routes & Cues"] and quick.find,
-    "diagnostics and search must be reachable from the compact settings panel")
+local quickAPI = addon.VignetteRadarQuickConfig
+local QC = {}
+-- Helpers for the schema-driven window: a control's card is its nearest
+-- ancestor with isCard; old page names resolve to a page and card.
+function QC.ObjectCard(object)
+    local node = object
+    while node do
+        if node.isCard then return node end
+        node = node.parent
+    end
+end
+function QC.quickCard(name)
+    local page, section = quickAPI.ResolvePage(name)
+    return section and quick.cards[page .. "/" .. section] or nil, page, section
+end
+function QC.quickFind(name, match)
+    local card, page = QC.quickCard(name)
+    for _, object in ipairs(objects) do
+        local owner = match(object) and QC.ObjectCard(object)
+        if owner and ((card and owner == card) or (not card and owner.parent == quick.pages[page])) then
+            return object
+        end
+    end
+end
+local function quickControl(name, key, value)
+    return QC.quickFind(name, function(object)
+        return object.optionKey == key and (value == nil or object.optionValue == value)
+    end)
+end
+function QC.quickButton(name, text)
+    return QC.quickFind(name, function(object) return object.kind == "Button" and object.text == text end)
+end
+local function quickShowsCard(name)
+    local card, page = QC.quickCard(name)
+    return quick:IsShown() and quick.selectedPage == page and quick.pages[page]:IsShown()
+        and (card == nil or card:IsShown())
+end
+function QC.quickRow(key, subkey)
+    for _, row in ipairs(quick.rows) do
+        if row.entry and row.entry.key == key and row.entry.subkey == subkey then return row end
+    end
+end
+function QC.quickSearch(text)
+    quick.searchInput:SetText(text)
+    quick.searchInput.scripts.OnTextChanged(quick.searchInput)
+end
+-- Every visible control stays inside its row, every row inside its card and
+-- every card inside the scroll view, so nothing clips against a border.
+function QC.CheckQuickBounds(label)
+    assert(quick.scroll.point[4] + quick.scroll.width <= quick.width - 10
+        and quick.content.width == quick.scroll.width, "the settings view must fit inside the window")
+    for _, object in ipairs(objects) do
+        local row = object.parent
+        if row and row.isRow and row:IsShown() and QC.ObjectCard(row) and QC.ObjectCard(row):IsShown()
+            and (object.kind == "Button" or object.kind == "CheckButton") and object.point then
+            local p = object.point
+            assert(p[1] == "TOPLEFT" and p[2] == row, "row controls need explicit row anchors")
+            assert(p[4] >= 8 and p[4] + object.width <= row.width - 6
+                and -p[5] >= 0 and -p[5] + object.height <= row.height + 1,
+                label .. ": control " .. tostring(object.optionKey or object.text)
+                    .. " must not clip at " .. tostring(p[4]) .. ", " .. tostring(p[5]))
+        end
+        if object.isRow and object:IsShown() and object.card and object.card:IsShown() then
+            local p, card = object.point, object.card
+            assert(p and p[2] == card and p[4] >= 0 and p[4] + object.width <= card.width + .01
+                and -p[5] + object.height <= card.height - 4,
+                label .. ": row " .. tostring(object.entry and object.entry.id or object.kind)
+                    .. " must stay inside its card")
+        end
+        if object.isCard and object:IsShown() and object.parent and object.parent.parent == quick.content then
+            assert(object.point[4] >= 0 and object.point[4] + object.width <= quick.content.width,
+                label .. ": card " .. tostring(object.titleText) .. " must fit the view")
+        end
+    end
+end
+assert(quick:IsShown() and quick.width == 468 and quick.height == 520
+    and #quick.railButtons == 9 and quick.railButtons[1].pageID == "Radar"
+    and quick.railButtons[9].pageID == "Tools",
+    "the settings dot must open the window with a nine-page icon rail")
+do
+    local expected = { "Radar", "Looks", "Alerts", "Markers", "Quests", "Routes", "HUD", "Data", "Tools" }
+    for index, id in ipairs(expected) do
+        local button = quick.railButtons[index]
+        assert(quick.pageOrder[index] == id and button.pageID == id
+            and button.art.texture:find("button%-icons%.tga$") and button.column == index - 1
+            and button.glyphName == "rail_" .. addon.VignetteRadarIconButton.RAIL[index]
+            and button.width == 36 and button.point[4] == 10,
+            "rail icon " .. id .. " must use its layered rail glyph")
+    end
+    local radarIcon = quick.railButtons[1]
+    assert(radarIcon._selected and radarIcon._artState == 2
+        and radarIcon.iconLayers.underline.vertexColor[4] > .9,
+        "the selected page icon must show the active mark")
+    assert(quick.close.backdrop == nil and quick.close.face.texture == "Interface\\Buttons\\WHITE8X8"
+        and quick.close.edge.height == 1, "window buttons need the quiet flat radar artwork")
+    -- The window is skinned like the radar face, outlined in the ring color,
+    -- through the tray's shared SkinLikeRadar.
+    local savedTray, skinned = addon.VignetteRadarTray, nil
+    addon.VignetteRadarTray = { SkinLikeRadar = function(frame) skinned = frame end }
+    quickAPI.Refresh()
+    addon.VignetteRadarTray = savedTray
+    assert(skinned == quick and quick.popupFaceSlices and #quick.popupEdgeSlices == 9,
+        "the settings window must be painted by Tray.SkinLikeRadar")
+    local rr, rg, rb = addon.VignetteRadarStyle.Color("rings")
+    local cardFace = quick.cards["Radar/Radar"].faceSlices[5].vertexColor
+    assert(math.abs(cardFace[1] - rr) < .001 and math.abs(cardFace[2] - rg) < .001
+        and math.abs(cardFace[3] - rb) < .001 and cardFace[4] < .1 and #quick.cards["Radar/Radar"].faceSlices == 9,
+        "cards must be a soft ring-colored wash without an outline")
+    local ar = addon.VignetteRadarStyle.Color("accent")
+    assert(quick.title.textColor[1] == ar and quick.title.text == "Magpie Settings",
+        "the window title must use the theme accent")
+end
+-- Every schema entry has a control, and the old page names still open.
+for _, id in ipairs(addon.Schema.order) do
+    local entry = addon.Schema.entries[id]
+    local found
+    for _, row in ipairs(quick.rows) do if row.entry == entry then found = true; break end end
+    assert(found, "settings window missing a row for " .. id)
+end
+for _, name in ipairs({ "Status", "Search", "Beacons", "World Focus", "Auto Route", "Quest Routing",
+    "Performance", "Tools", "Routes & Cues", "Themes", "Guides", "Explore", "Wayfinding", "Map Data",
+    "Source Fusion", "Zygor", "In-World Marker", "Constellation", "Layout", "Behavior" }) do
+    assert(name == "Search" or quick.pages[(quickAPI.ResolvePage(name))],
+        "old page name " .. name .. " must map to a new page")
+end
 settings.vignetteRadarPerformance = "low"
 assert(addon.VignetteRadarRenderSeconds() == .25
     and addon.VignetteRadarScanSeconds() == 2.5,
@@ -2194,58 +2374,84 @@ assert(addon.VignetteRadarRenderSeconds() == .15
     and addon.VignetteRadarScanSeconds() == 1.5,
     "Balanced mode must offer a middle update rate")
 settings.vignetteRadarPerformance = "standard"
-quick.find.scripts.OnClick(quick.find)
-quick.searchInput:SetText("vignetteRadarPerformance")
-quick.searchInput.scripts.OnTextChanged()
-assert(quick.searchRows[1]:IsShown() and quick.searchRows[2]:IsShown()
-    and quick.searchRows[3]:IsShown() and not quick.searchRows[4]:IsShown(),
-    "settings search must show each update-rate choice once")
-quick.searchInput:SetText("arrival")
-quick.searchInput.scripts.OnTextChanged()
-assert(quick.searchRows[1]:IsShown()
-    and quick.searchRows[1].result.match:find("arrival", 1, true),
-    "search must find a route or waypoint arrival option without a slash command")
-local arrivalPage = quick.searchRows[1].result.page
-quick.searchRows[1].scripts.OnClick(quick.searchRows[1])
-assert(quick.pages[arrivalPage]:IsShown())
-quick.tabs.Radar.scripts.OnClick(quick.tabs.Radar)
-local tabCount, exposed, colorSlots = 0, {}, {}
-for _ in pairs(quick.tabs) do tabCount = tabCount + 1 end
-assert(tabCount == 12 and quick.pages.Themes and quick.pages.Guides and quick.pages.Explore
-    and quick.pages.Wayfinding and quick.pages["Map Data"],
-    "compact settings must visibly include exploration controls")
+-- Search filters rows across every page and hides everything else.
+QC.quickSearch("update rate")
 do
-    local openPlayerTracker, openings
-    for _, object in ipairs(objects) do
-        if object.parent == quick.pages.Tools and object.text == "Player Tracker" then
-            openPlayerTracker = object
-            break
+    local performanceRow, enableRow = QC.quickRow("vignetteRadarPerformance"), QC.quickRow("vignetteRadarEnabled")
+    assert(performanceRow:IsShown() and performanceRow.card:IsShown() and quick.pages.Tools:IsShown()
+        and not quick.pages.Radar:IsShown() and not enableRow:IsShown() and not quick.noResults:IsShown(),
+        "settings search must show the matching update-rate row and hide the rest")
+    assert(#performanceRow.buttons == 3 and performanceRow.buttons[3].text == "Low CPU",
+        "settings search must show each update-rate choice once")
+end
+QC.quickSearch("arrival")
+do
+    local count = 0
+    for _, row in ipairs(quick.rows) do
+        if row:IsShown() and row.card:IsShown() and row.entry then
+            count = count + 1
+            assert(row.entry.label:lower():find("arrival", 1, true) or row.entry.key:lower():find("arrival", 1, true),
+                "search results must only contain matching rows")
         end
     end
-    local original = addon.VignetteRadarPlayerTracker
-    addon.VignetteRadarPlayerTracker = { Open = function() openings = (openings or 0) + 1 end }
-    assert(openPlayerTracker and openPlayerTracker.point[4] >= 12
-        and openPlayerTracker.point[4] + openPlayerTracker.width <= quick.width - 12,
-        "Player Tracker must have a visible, correctly placed Tools action")
-    openPlayerTracker.scripts.OnClick()
-    assert(openings == 1, "the Tools action must open Player Tracker")
-    addon.VignetteRadarPlayerTracker = original
+    assert(count >= 4 and quick.pages.Routes:IsShown() and not quick.pages.Looks:IsShown(),
+        "search must find every route and waypoint arrival option across pages")
 end
-local openBeacons, previewBeacons, backFromBeacons
-for _, object in ipairs(objects) do
-    if object.parent == quick.pages.Markers and object.text == "Bearing Bar..." then
-        openBeacons = object
-    elseif object.parent == quick.pages.Beacons and object.text == "Preview" then
-        previewBeacons = object
-    elseif object.parent == quick.pages.Beacons and object.text == "Back To Markers" then
-        backFromBeacons = object
+QC.CheckQuickBounds("search results")
+quick.railButtons[1].scripts.OnClick(quick.railButtons[1])
+assert(quick.query == "" and quick.searchInput.text == "" and quick.pages.Radar:IsShown()
+    and not quick.pages.Routes:IsShown(), "choosing a page must clear the search")
+local exposed, colorSlots = {}, {}
+-- Every page lays out inside its bounds with Advanced Tools on.
+settings.vignetteRadarAdvancedTools = true
+addon.InvalidateSettings()
+for _, button in ipairs(quick.railButtons) do
+    button.scripts.OnClick(button)
+    assert(quick.pages[button.pageID]:IsShown() and button._selected, "rail icon must open " .. button.pageID)
+    for id, page in pairs(quick.pages) do
+        assert(page:IsShown() == (id == button.pageID), "only the selected page may show")
     end
+    QC.CheckQuickBounds(button.pageID)
 end
-assert(openBeacons and previewBeacons and backFromBeacons,
-    "multi-point beacons must have a visible entry and preview in Quick settings")
-openBeacons.scripts.OnClick(openBeacons)
-assert(quick.pages.Beacons:IsShown(), "the marker settings must open beacon options")
+do
+    local openPlayerTracker = QC.quickButton("Data", "Player Tracker")
+    local original, openings = addon.VignetteRadarPlayerTracker, 0
+    addon.VignetteRadarPlayerTracker = { Open = function() openings = openings + 1 end }
+    assert(openPlayerTracker and QC.ObjectCard(openPlayerTracker) == quick.cards["Data/Planning Tools"],
+        "Player Tracker must have a visible Planning Tools action")
+    openPlayerTracker.scripts.OnClick()
+    assert(openings == 1, "the Planning Tools action must open Player Tracker")
+    addon.VignetteRadarPlayerTracker = original
+    quickAPI.OpenPage("Data")
+    local planning, compass = quick.cards["Data/Planning Tools"], quick.cards["Routes/Sound Compass"]
+    assert(planning:IsShown(), "Advanced Tools must show their entry points while the switch is on")
+    quickAPI.OpenPage("Routes & Cues")
+    assert(compass:IsShown() and quickShowsCard("Routes & Cues"),
+        "the old Routes & Cues page must open Sound Compass while Advanced Tools is on")
+    settings.vignetteRadarAdvancedTools = false
+    addon.InvalidateSettings()
+    addon.VignetteRadarQuickConfig.Refresh()
+    assert(not compass:IsShown(), "Advanced Tools off must hide Sound Compass")
+    quickAPI.OpenPage("Data")
+    assert(not planning:IsShown() and quick.cards["Data/Hunting Presets"]:IsShown(),
+        "Advanced Tools off must hide Studio, Survey, Atlas, Intelligence and Player Tracker")
+    QC.quickSearch("expedition studio")
+    assert(quick.noResults:IsShown() and not planning:IsShown(),
+        "search must not reveal hidden Advanced Tools")
+    QC.quickSearch("sound compass")
+    assert(not compass:IsShown(), "search must not reveal hidden Advanced Tools settings")
+    QC.quickSearch("")
+    settings.vignetteRadarAdvancedTools = true
+    addon.InvalidateSettings()
+    quickAPI.OpenPage("Radar")
+end
+quickAPI.OpenPage("Bearing Bar")
+local previewBeacons = QC.quickButton("Bearing Bar", "Preview")
+assert(quickShowsCard("Bearing Bar") and previewBeacons
+    and quickControl("Beacons", "vignetteRadarBeaconMax", 24),
+    "multi-point beacons must have a visible card and preview in settings")
 previewBeacons.scripts.OnClick(previewBeacons)
+assert(previewBeacons.text == "Stop Preview", "the preview button must offer to stop the sample")
 local beaconRail = assert(_G.VignetteRadarBeaconRail)
 assert(beaconRail:IsShown() and beaconRail.width == 520 and beaconRail.height == 146
     and beaconRail.heading.text == "Bearing Bar",
@@ -2261,8 +2467,8 @@ for _, object in ipairs(objects) do
     end
 end
 assert(previewCards == 2, "preview should show both a rare and a quest point")
-backFromBeacons.scripts.OnClick(backFromBeacons)
-assert(quick.pages.Markers:IsShown() and beaconRail:IsShown()
+previewBeacons.scripts.OnClick(previewBeacons)
+assert(quickShowsCard("Bearing Bar") and beaconRail:IsShown()
     and beaconRail.summary.text == "1 Quest  ·  Facing",
     "leaving preview must restore real beacon data without a stuck sample: "
         .. tostring(beaconRail.summary.text))
@@ -2292,14 +2498,42 @@ do
             grouped = object; break
         end
     end
-    assert(grouped and grouped.icon.texture:find("beacon%-treasure%.tga$")
+    assert(grouped and grouped.icon.atlas == "VignetteLoot" and grouped.icon.vertexColor[1] == 1
+        and grouped.badge.text == ""
         and grouped.label.text == "First Chest" and grouped.focusLine:IsShown(),
-        "treasures need distinct grouped art and an owned-waypoint cue")
+        "treasures need Blizzard's untinted chest icon and an owned-waypoint cue")
     grouped.scripts.OnClick(grouped, "RightButton")
     assert(grouped.label.text == "Second Chest" and grouped.groupIndex == 2,
         "right-click should choose a different point in a crowded bearing")
     grouped.scripts.OnClick(grouped, "LeftButton")
     assert(selected == second, "clicking a saved treasure bearing must focus the selected note")
+    local beaconQuest = { questID = 4242, name = "Bearing Quest", mapID = 1,
+        mapX = .4, mapY = .4, worldX = -120, worldY = 40 }
+    addon.VignetteRadarBeacons.Sync(1, { worldX = 0, worldY = 0 }, {}, { beaconQuest }, {})
+    local questCard
+    for _, object in ipairs(objects) do
+        if object.parent == beaconRail and object.label and object.label.text == "Bearing Quest"
+            and object:IsShown() then questCard = object; break end
+    end
+    assert(questCard, "the quest bearing card must render")
+    local exploration = addon.VignetteRadarExploration
+    local oldFocusQuest, oldSelectQuest = exploration.FocusQuest,
+        addon.VignetteRadarWorldFocus.SelectQuest
+    local focusCalls, selectCalls = 0, 0
+    exploration.FocusQuest = function(id)
+        focusCalls = focusCalls + 1
+        addon.VignetteRadarWorldFocus.SelectQuest(id)
+    end
+    addon.VignetteRadarWorldFocus.SelectQuest = function() selectCalls = selectCalls + 1 end
+    questCard.scripts.OnClick(questCard, "LeftButton")
+    assert(focusCalls == 1 and selectCalls == 1,
+        "a quest bearing click must select its quest once")
+    addon.VignetteRadarExploration = nil
+    questCard.scripts.OnClick(questCard, "LeftButton")
+    addon.VignetteRadarExploration = exploration
+    assert(selectCalls == 2, "without Exploration the click must still select the quest")
+    exploration.FocusQuest = oldFocusQuest
+    addon.VignetteRadarWorldFocus.SelectQuest = oldSelectQuest
     addon.VignetteRadarWorldFocus.SelectNote = oldSelect
     addon.VignetteRadarWorldFocus.GetFocusedStep = oldFocused
     settings.vignetteRadarPOISource, settings.vignetteRadarBeaconTreasures = oldSource, oldTreasure
@@ -2320,24 +2554,13 @@ assert(escapePanels.VignetteRadarExplorePanel
     and escapePanels.VignetteRadarQuickConfigPanel,
     "Escape must close exploration, the quest key, and compact settings")
 for _, object in ipairs(objects) do
-    if object.optionKey then exposed[object.optionKey] = true end
-    if object.colorSlot then colorSlots[object.colorSlot] = true end
-    local page = object.parent
-    if object.point and (object.kind == "Button" or object.kind == "CheckButton")
-        and page and page.parent == quick and page ~= quick then
-        local p = object.point
-        assert(p[1] == "TOPLEFT" and p[2] == page, "compact controls need explicit page anchors")
-        local x, y = p[4], p[5]
-        assert(x >= 10 and x + object.width <= quick.width - 10
-            and -y >= 0 and -y + object.height <= page.height - 10,
-            "compact control " .. tostring(object.optionKey or object.text)
-                .. " must not clip against a page border at " .. tostring(x) .. ", " .. tostring(y))
-    end
+    if object.optionKey and QC.ObjectCard(object) then exposed[object.optionKey] = true end
+    if object.colorSlot and QC.ObjectCard(object) == quick.cards["Looks/Colors"] then colorSlots[object.colorSlot] = true end
 end
 for _, key in ipairs({ "vignetteRadarEnabled", "vignetteRadarHideWhenEmpty", "vignetteRadarLauncherVisible",
     "vignetteRadarWorldMap", "vignetteRadarRange", "vignetteRadarScale",
     "vignetteRadarNorthUp", "vignetteRadarHoverTools", "vignetteRadarActiveCue",
-    "vignetteRadarRouteHorizonExpanded", "vignetteRadarSourceBadges",
+    "vignetteRadarSourceBadges",
     "vignetteRadarEmptyHelp", "vignetteRadarEdgeCues",
     "vignetteRadarFollowTrackedQuest",
     "vignetteRadarAlerts", "vignetteRadarAlertSound", "vignetteRadarAlertCategories",
@@ -2355,7 +2578,7 @@ for _, key in ipairs({ "vignetteRadarEnabled", "vignetteRadarHideWhenEmpty", "vi
     "vignetteRadarChevronOpacity", "vignetteRadarHeadingOpacity",
     "vignetteRadarChevronDistance", "vignetteRadarHeadingLength", "vignetteRadarFullSweep",
     "vignetteRadarTheme", "vignetteRadarSmartZoom", "vignetteRadarUntangle",
-    "vignetteRadarBreadcrumbs", "vignetteRadarTrailStyle", "vignetteRadarApproachAlerts",
+    "vignetteRadarTrailMode", "vignetteRadarLeadNextStops", "vignetteRadarTrailStyle", "vignetteRadarApproachAlerts",
     "vignetteRadarJournalEnabled", "vignetteRadarApproachDistance",
     "vignetteRadarPOISource", "vignetteRadarPOITypes", "vignetteRadarPOIIcons",
     "vignetteRadarHideCleared", "vignetteRadarWorldFocusEnabled",
@@ -2369,29 +2592,22 @@ end
 for _, slot in ipairs(addon.VignetteRadarStyle.slots) do
     assert(colorSlots[slot], "theme missing color slot: " .. slot)
 end
-local function quickControl(page, key, value)
-    for _, object in ipairs(objects) do
-        if (object.parent == quick.pages[page] or (page == "Themes" and object.parent == quick.themeContent))
-            and object.optionKey == key
-            and (value == nil or object.optionValue == value) then return object end
-    end
-end
-assert(quickControl("Quest Routing", "vignetteRadarAutoRouteNearbyZones").checked
+quickAPI.OpenPage("Quest Routing")
+assert(quickShowsCard("Quest Routing")
+    and quickControl("Quest Routing", "vignetteRadarAutoRouteNearbyZones").checked
     and quickControl("Quest Routing", "vignetteRadarAutoRouteQuestStarts").checked
     and quickControl("Quest Routing", "vignetteRadarAutoRouteQuestNearest").checked,
     "all new quest routing choices should be enabled and visible by default")
 do
-    local zygorCheck = assert(quickControl("World Focus", "vignetteRadarWorldFocusZygor"))
-    local pinZygor = assert(quick.pages["World Focus"].pinZygor)
-    assert(zygorCheck.label.parent.width == 145
-        and zygorCheck.label.parent.point[4] + zygorCheck.label.parent.width < pinZygor.point[4]
-        and pinZygor.point[4] + pinZygor.width <= quick.width - 14,
-        "the direct Zygor pin action must fit beside its toggle with a visible gutter")
-    pinZygor.scripts.OnClick()
-    assert(quick.pages.Zygor:IsShown()
+    quickAPI.OpenPage("World Focus")
+    assert(quickShowsCard("World Focus") and quickControl("World Focus", "vignetteRadarWorldFocusEnabled")
+        and quick.focusStatus, "World Focus must open as a card on the Routes page")
+    quickAPI.OpenPage("Zygor")
+    assert(quickShowsCard("Zygor")
+        and quickControl("Zygor", "vignetteRadarWorldFocusZygor")
         and quickControl("Zygor", "vignetteRadarFollowZygor")
         and quickControl("Zygor", "vignetteRadarZygorMode", "travel"),
-        "World Focus should open dedicated Zygor follow and destination controls")
+        "the Zygor card must hold follow and destination controls")
     local bridge = addon.VignetteRadarZygor
     local routeAPI = addon.VignetteRadarAPI
     local originalBindZygor = routeAPI.BindZygorGuide
@@ -2401,83 +2617,103 @@ do
         pinZygorCalled = mode == "objective"
         return true
     end
-    quick.pages.Zygor.pinObjective.scripts.OnClick()
-    assert(pinZygorCalled, "the Zygor page must pin the active objective")
+    local pinObjective = assert(QC.quickButton("Zygor", "Pin Objective"))
+    pinObjective.scripts.OnClick()
+    assert(pinZygorCalled, "the Zygor card must pin the active objective")
     bridge.Pin = function()
         return false, "Zygor has no active guide waypoint"
     end
-    quick.pages.Zygor.pinObjective.scripts.OnClick()
-    assert(quick.pages.Zygor.status.text == "Zygor has no active guide waypoint",
+    pinObjective.scripts.OnClick()
+    assert(quick.zygorStatus.text == "Zygor has no active guide waypoint",
         "the settings action must show a persistent explanation when pinning fails")
     bridge.Pin = originalPinZygor
     routeAPI.BindZygorGuide = originalBindZygor
 end
-quick.tabs.Explore.scripts.OnClick(quick.tabs.Explore)
-assert(quick.pages.Explore:IsShown() and quickControl("Explore", "vignetteRadarBreadcrumbs")
-    and quickControl("Explore", "vignetteRadarTrailStyle").text == "Styles & Flow",
-    "the compact Explore tab must expose the trail and its complete picker")
-assert(quick.rangeMinus.backdrop == nil and #quick.rangeMinus.strokes == 1
-    and quick.rangePlus.backdrop == nil and #quick.rangePlus.strokes == 2
-    and quickControl("Layout", "vignetteRadarNorthUp").glyph.label
-    and #quickControl("Behavior", "vignetteRadarKeepVisibleCombat").glyph.lines == 4,
-    "compact range, north, and visibility controls must match the radar glyphs")
-quick.tabs.Themes.scripts.OnClick(quick.tabs.Themes)
-assert(quick.pages.Themes:IsShown() and not quick.pages.Radar:IsShown())
+quickAPI.OpenPage("Explore")
+assert(quickShowsCard("Explore") and quickControl("Explore", "vignetteRadarTrailMode", "follow")
+    and quickControl("Explore", "vignetteRadarTrailMode", "lead")
+    and quickControl("Explore", "vignetteRadarLeadNextStops")
+    and quickControl("Explore", "vignetteRadarTrailStyle").text == "Trail Styles & Flow",
+    "the Exploring card must expose the trail and its complete picker")
+do
+    local range = QC.quickRow("vignetteRadarRange")
+    assert(range.kind == "stepper" and range.minus.backdrop == nil and #range.minus.strokes == 1
+        and range.plus.backdrop == nil and #range.plus.strokes == 2
+        and quickControl("Layout", "vignetteRadarNorthUp").glyph.label
+        and #quickControl("Behavior", "vignetteRadarKeepVisibleCombat").glyph.lines == 4,
+        "range, north, and visibility controls must match the radar glyphs")
+    range.plus.scripts.OnClick(range.plus)
+    assert(settings.vignetteRadarRange == 600 and range.value.text == "600 yd",
+        "the range stepper must apply live through the schema")
+    range.minus.scripts.OnClick(range.minus)
+    assert(settings.vignetteRadarRange == 450, "the range stepper must step back down")
+end
+-- The content scrolls with the wheel and moves its thumb.
+quickAPI.OpenPage("Markers")
+assert(quick.contentHeight > quick.scroll.height, "the Markers page must be taller than the view")
+quick.scroll.scripts.OnMouseWheel(quick.scroll, -1)
+assert(quick.scrollOffset == 48 and quick.scroll:GetVerticalScroll() == 48 and quick.thumb:IsShown()
+    and quick.thumb.point[5] < -48, "wheel scrolling must move the page and its thumb")
+for _ = 1, 40 do quick.scroll.scripts.OnMouseWheel(quick.scroll, -1) end
+assert(quick.scrollOffset == quick.contentHeight - quick.scroll.height, "scrolling must stop at the last card")
+quickAPI.OpenPage("Themes")
+assert(quickShowsCard("Themes") and not quick.pages.Radar:IsShown() and quick.scrollOffset == 0)
 local style = addon.VignetteRadarStyle
-assert(#style.order == 32 and quick.themeScroll.width == 244 and quick.themeScroll.height == 46
-    and quick.themeScroll.clipsChildren and quick.themeScroll.scrollChild == quick.themeContent
-    and quick.themeContent.height == 8 * 24,
-    "thirty-two palettes must live in a clipped, two-row scroll viewport")
-assert(quick.themeTrack.point[4] == 267 and quick.themeTrack.point[5] == -18
-    and quick.themeScroll.point[4] + quick.themeScroll.width + 8 <= quick.themeTrack.point[4]
-    and 18 + quick.themeTrack.height + 10 <= 78,
-    "the scrollbar needs a visible gutter from palette buttons and controls below")
-for index, name in ipairs(style.order) do
-    local choice = assert(quick.themeChoices[name])
-    local p = choice.point
-    assert(style.HasTheme(name) and style.PresetColor(name, "accent")
-        and choice.parent == quick.themeContent and choice.width == 56
-        and p[4] == ((index - 1) % 4) * 61
-        and p[4] + choice.width <= quick.themeContent.width - 5
-        and -p[5] == math.floor((index - 1) / 4) * 24 + 1,
-        "each named palette needs a valid color and a clipped four-column grid cell")
-    for _, slot in ipairs(style.slots) do
-        local r, g, b = style.PresetColor(name, slot)
-        assert(type(r) == "number" and type(g) == "number" and type(b) == "number"
-            and r >= 0 and r <= 1 and g >= 0 and g <= 1 and b >= 0 and b <= 1,
-            "every palette must define a valid color for " .. slot)
+do
+    local row, picker = quick.themeRow, quick.themePicker
+    local each = math.floor((row.width - 20 - 16) / 5)
+    local count = #style.order
+    assert(picker.view.kind == "single" and picker.singleTab.highlightLocked
+        and row.height == 48 + math.ceil(count / 5) * 24 + 2 + 25,
+        "the picker opens on Single Color with every palette in a five-column grid, then Customize")
+    for index, name in ipairs(style.order) do
+        local choice = assert(quick.themeChoices[name])
+        local p = choice.point
+        assert(choice.parent == row and choice.width == each and choice:IsShown()
+            and p[4] == 10 + ((index - 1) % 5) * (each + 4)
+            and p[4] + choice.width <= row.width - 8
+            and -p[5] == 48 + math.floor((index - 1) / 5) * 24,
+            "each single palette needs a grid cell inside the card")
     end
+    assert(quick.themeChoices.verdant._selected == true and not quick.themeChoices.ember._selected
+        and not quick.themeChoices.verdant.mark,
+        "the selected theme uses the underline selection, never a full frame")
+    -- Drill in: Multi-Color, then a family, then a variant.
+    picker.multiTab.scripts.OnClick(picker.multiTab)
+    assert(picker.view.kind == "multi" and not picker.view.family and picker.multiTab.highlightLocked
+        and not quick.themeChoices.verdant:IsShown() and quick.themeChoices.verdant.point == nil,
+        "Multi-Color lists families and drops the single grid")
+    local family = assert(picker.families.catppuccin)
+    assert(family:IsShown() and #family.strip == 7, "families show a palette strip")
+    family.scripts.OnEnter(family)
+    assert(picker.trail.text == "Multi-Color > Catppuccin", "hovering a family names it in the trail")
+    family.scripts.OnLeave(family)
+    family.scripts.OnClick(family)
+    local macchiato = assert(quick.themeChoices.catppuccin_macchiato)
+    assert(picker.view.family == "catppuccin" and picker.back:IsShown() and macchiato:IsShown()
+        and macchiato.optionValue == "catppuccin_macchiato", "a family opens its variants")
+    macchiato.scripts.OnEnter(macchiato)
+    local mr, mg, mb = style.PresetColor("catppuccin_macchiato", "rare")
+    assert(picker.swatches[5].color[1] == mr and picker.swatches[5].color[2] == mg
+        and picker.trail.text == "Multi-Color > Catppuccin > Macchiato", "hover previews the variant's roles")
+    macchiato.scripts.OnLeave(macchiato)
+    macchiato.scripts.OnClick(macchiato)
+    assert(settings.vignetteRadarTheme == "catppuccin_macchiato" and macchiato.highlightLocked
+        and macchiato._selected == true and family.highlightLocked,
+        "a variant applies and stays marked, with its family")
+    local ar = style.Color("accent")
+    assert(math.abs(ar - 0xc6 / 255) < 1e-9 and quick.title.textColor[1] == ar
+        and quick.railButtons[2].tile == nil, "the window takes the variant's accent")
+    picker.back.scripts.OnClick(picker.back)
+    assert(not picker.view.family and not macchiato:IsShown(), "Back returns to the families")
+    QC.CheckQuickBounds("theme families")
+    picker.singleTab.scripts.OnClick(picker.singleTab)
+    assert(quick.themeChoices.lagoon:IsShown(), "Single Color brings the grid back")
+    QC.CheckQuickBounds("single themes")
 end
-local function visibleThemeCount()
-    local count = 0
-    for _, name in ipairs(style.order) do
-        local top = -quick.themeChoices[name].point[5]
-        if top >= quick.themeOffset and top + 21 <= quick.themeOffset + quick.themeScroll.height then
-            count = count + 1
-        end
-    end
-    return count
-end
-assert(visibleThemeCount() == 8, "only two rows of four palettes may fit in the viewport")
-for _ = 1, 10 do quick.themeScroll.scripts.OnMouseWheel(quick.themeScroll, -1) end
-assert(quick.themeOffset == 144 and quick.themeScroll:GetVerticalScroll() == 144
-    and quick.themeThumb.point[5] < -25 and visibleThemeCount() == 8,
-    "wheel scrolling must reach the last two rows and move the scrollbar thumb")
-quick.SetThemeScroll(0)
-quick.themeTrack.top = 500
-cursorY = 500
-quick.themeTrack.scripts.OnMouseDown(quick.themeTrack)
-cursorY = 450
-quick.themeTrack.scripts.OnUpdate(quick.themeTrack)
-assert(quick.themeOffset == 144, "dragging the scrollbar must reach the final palette rows")
-quick.themeTrack.scripts.OnMouseUp(quick.themeTrack)
-assert(not quick.themeTrack.dragging and not quick.themeTrack.scripts.OnUpdate,
-    "releasing the scrollbar must stop its drag update")
-quick.themeTrack.top = nil
 quick.themeChoices.lagoon.scripts.OnClick()
-assert(settings.vignetteRadarTheme == "lagoon" and quick.themeOffset == 144,
+assert(settings.vignetteRadarTheme == "lagoon" and quick.themeChoices.lagoon.highlightLocked,
     "a palette in the final row must remain selectable")
-quick.SetThemeScroll(0)
 quickControl("Themes", "vignetteRadarTheme", "ember").scripts.OnClick()
 assert(settings.vignetteRadarTheme == "ember" and panel.title.textColor[1] == 1
     and panel.field.background.vertexColor[1] > .04,
@@ -2485,19 +2721,28 @@ assert(settings.vignetteRadarTheme == "ember" and panel.title.textColor[1] == 1
 assert(launcher.bezel.vertexColor[1] == 1 and launcher.dial[1].color[1] > .8
     and launcher.expandChevron[1].color[1] == 1,
     "the launcher lens, outline, and expansion cue must follow the selected theme")
+do
+    local er, eg, eb = style.Color("accent")
+    assert(quick.title.textColor[1] == er and quick.title.textColor[2] == eg
+        and quick.title.textColor[3] == eb
+        and quick.railButtons[2].art.vertexColor[1] == (quick.railButtons[2]._selected
+            and select(1, addon.VignetteRadarIconButton.SelectedColor()) or er)
+        and quick.cards["Looks/Theme"].title.textColor[1] == er,
+        "a theme change must recolor the settings window's title, rail and cards live")
+end
 ColorPickerFrame = {
     SetupColorPickerAndShow = function(self, info) self.info = info end,
     GetColorRGB = function() return .2, .4, .6 end,
 }
 for _, object in ipairs(objects) do
-    if object.parent == quick.pages.Themes and object.colorSlot == "accent" then
+    if object.colorSlot == "accent" and QC.ObjectCard(object) == quick.cards["Looks/Colors"] then
         object.scripts.OnClick(object)
         break
     end
 end
 assert(ColorPickerFrame.info, "a color swatch must open Blizzard's color picker")
 ColorPickerFrame.info.swatchFunc()
-assert(math.abs(panel.player.vertexColor[1] - .2) < .001 and quick.customLabel.text == "CUSTOM COLORS",
+assert(math.abs(panel.player.vertexColor[1] - .2) < .001 and quick.customLabel.text == "Custom Colors",
     "a custom accent must immediately recolor the player dot")
 assert(math.abs(launcher.expandChevron[1].color[1] - .2) < .001,
     "custom accent colors must also recolor the miniature instrument")
@@ -2530,7 +2775,7 @@ assert(settings.vignetteRadarShapes == false
     and panel.blipByKey["preview-boss"].dot.vertexColor[1] > panel.blipByKey["preview-rare"].dot.vertexColor[1],
     "dots-only mode must keep rare and boss colors visibly distinct")
 for _, object in ipairs(objects) do
-    if object.parent == quick.pages.Themes and object.colorSlot == "boss" then
+    if object.colorSlot == "boss" and QC.ObjectCard(object) == quick.cards["Looks/Colors"] then
         object.scripts.OnClick(object)
         break
     end
@@ -2539,20 +2784,14 @@ ColorPickerFrame.info.swatchFunc()
 assert(math.abs(panel.blipByKey["preview-boss"].dot.vertexColor[1] - .2) < .001
     and math.abs(panel.blipByKey["preview-rare"].dot.vertexColor[1] - .78) < .001,
     "world-boss color must be independently editable from rare color")
-quick.tabs.Guides.scripts.OnClick(quick.tabs.Guides)
+quickAPI.OpenPage("Guides")
 assert(math.abs(panel.innerLabel.textColor[4] - panel.innerRing[1].color[4]) < .001
     and math.abs(panel.outerLabel.textColor[4] - panel.middleRing[1].color[4]) < .001,
     "yard labels must initially match the opacity of their rings")
-local guidesSweep = quickControl("Guides", "vignetteRadarFullSweep")
-assert(guidesSweep and -guidesSweep.point[5] + guidesSweep.height
-    <= quick.pages.Guides.height - 12,
-    "the extra yard-label control must leave the Guides page's last toggle inside its gutter")
+assert(quickShowsCard("Guides") and quickControl("Guides", "vignetteRadarFullSweep"),
+    "the Radar Guides card must hold the sweep toggle")
 local function plusFor(key)
-    for _, object in ipairs(objects) do
-        if object.parent == quick.pages.Guides and object.optionKey == key and object.text == "+" then
-            return object
-        end
-    end
+    return QC.quickFind("Guides", function(object) return object.optionKey == key and object.text == "+" end)
 end
 plusFor("vignetteRadarRingOpacity").scripts.OnClick()
 assert(settings.vignetteRadarRingOpacity == .75
@@ -2610,15 +2849,10 @@ do
     local ringAlpha = panel.rangeRing[1].color[4]
     local borderAlpha = panel.squareBorder.vertexColor[4]
     local roundBorderAlpha = panel.field.halo.vertexColor[4]
-    quick.tabs.Themes.scripts.OnClick(quick.tabs.Themes)
-    local borderPlus
-    for _, object in ipairs(objects) do
-        if object.parent == quick.pages.Themes
-            and object.optionKey == "vignetteRadarBorderOpacity" and object.text == "+" then
-            borderPlus = object
-            break
-        end
-    end
+    quickAPI.OpenPage("Themes")
+    local borderPlus = QC.quickFind("Themes", function(object)
+        return object.optionKey == "vignetteRadarBorderOpacity" and object.text == "+"
+    end)
     assert(borderPlus, "Themes must expose an independent radar border control")
     borderPlus.scripts.OnClick(borderPlus)
     assert(panel.squareBorder.vertexColor[4] > borderAlpha
@@ -2628,7 +2862,7 @@ do
     settings.vignetteRadarBorderOpacity = .5
     addon.VignetteRadarAPI.Refresh(false)
 end
-quick.tabs.Behavior.scripts.OnClick(quick.tabs.Behavior)
+quickAPI.OpenPage("Behavior")
 local combatCheck = quickControl("Behavior", "vignetteRadarKeepVisibleCombat")
 combatCheck:SetChecked(true)
 combatCheck.scripts.OnClick(combatCheck)
@@ -2640,7 +2874,7 @@ assert(settings.vignetteRadarKeepVisibleCombat == false and combatCheck:GetCheck
 panel.settingsDot.scripts.OnClick(panel.settingsDot)
 assert(not quick:IsShown(), "clicking the dot again must close compact settings")
 panel.settingsDot.scripts.OnClick(panel.settingsDot)
-quick.tabs.Layout.scripts.OnClick(quick.tabs.Layout)
+quickAPI.OpenPage("Layout")
 local hoverCheck = quickControl("Layout", "vignetteRadarHoverTools")
 assert(hoverCheck and not quickControl("Layout", "vignetteRadarCircleOnly")
     and not panel.frameToggle:IsShown(),
@@ -2656,11 +2890,18 @@ UIParent:SetSize(800, 600)
 addon.SetVignetteRadarLayout("squat")
 panel:SetScale(1)
 panel:ClearAllPoints()
-panel:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 210, -100)
+panel:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 10, -100)
 panel.settingsDot.scripts.OnClick(panel.settingsDot)
 assert(quick:IsShown() and quick.point[1] == "TOPLEFT" and quick.point[2] == panel
-    and quick:GetScale() > .65 and quick:GetScale() < .75,
-    "on an 800px canvas the settings panel must shrink beside Squat instead of covering it")
+    and quick:GetScale() > .8 and quick:GetScale() < .9,
+    "on an 800px canvas the settings window must shrink beside Squat instead of covering it: "
+        .. tostring(quick:GetScale()))
+panel.settingsDot.scripts.OnClick(panel.settingsDot)
+panel:ClearAllPoints()
+panel:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 210, -100)
+panel.settingsDot.scripts.OnClick(panel.settingsDot)
+assert(quick:IsShown() and quick.point[1] == "CENTER" and quick:GetScale() * quick.height <= 600 - 24,
+    "without room beside the radar the settings window must center and fit the screen")
 panel.settingsDot.scripts.OnClick(panel.settingsDot)
 UIParent:SetSize(1600, 900)
 
@@ -2747,7 +2988,7 @@ settings.vignetteRadarRange = savedRange
 livePositions.treasure = savedTreasurePosition
 C_QuestLog = savedQuestLog
 
--- Auto Route has its own movable heading widget, independent of either radar frame.
+-- Auto Route: the radar's route symbols, and the corner tool that switches the Guide Panel.
 do
     local focus = addon.VignetteRadarWorldFocus
     local originalRoutePoint = focus.GetRoutePoint
@@ -2777,12 +3018,13 @@ do
     focus.GetHorizon = function()
         return { { name = "Crystal Cache" }, { name = "Silvermaw" } }
     end
-    settings.vignetteRadarRouteArrow = true
+    addon.VignetteRadarTray = addon.VignetteRadarTrayForRouteCard
+    settings.vignetteRadarGuidePanel = true
     addon.VignetteRadarAPI.Refresh(false)
     local cornerRoute = routeHover
     assert(panel.routeToggle.trackingIcon:IsShown()
         and panel.routeToggle.trackingIcon.texture
-            == "Interface\\AddOns\\VignetteRadar\\Media\\radar-route-types.tga"
+            == "Interface\\AddOns\\Magpie\\Media\\radar-route-types.tga"
         and panel.routeToggle.trackingIcon.texCoord[1] > .25
         and panel.routeToggle.trackingIcon.texCoord[1] < .5
         and not panel.routeToggle.art:IsShown()
@@ -2807,126 +3049,23 @@ do
         "the route symbol should retain the themed guide mark for Zygor")
     focus.GetTrackedRouteKind = function() return "treasure" end
     addon.VignetteRadarAPI.Refresh(false)
-    local widget = addon.VignetteRadarRouteArrow.GetFrame()
-    local initialRotation = widget and widget.pointer.rotation
-    assert(widget and widget:IsShown() and widget.parent == UIParent
-        and widget.movable and widget.clamped and widget.dragButtons[1] == "LeftButton"
-        and widget.pointer.width == 16 and widget.pointer.height == 16
-        and math.abs(initialRotation + snapshot.facing) < .01
-        and widget.node.name.text == "Crystal Cache"
-        and widget.node.meta.text == "Now · Approach 2/3 · 300 yd"
-        and widget.next.text == "Next  Silvermaw",
-        "the movable crystal pointer and node readout must show the active route stop")
-    local originalFacing = GetPlayerFacing
-    GetPlayerFacing = function() return snapshot.facing + .5 end
-    widget.scripts.OnUpdate(widget, .04)
-    assert(math.abs(widget.pointer.rotation - initialRotation + .5) < .01,
-        "bearing-only updates must turn the arrow between full route refreshes")
-    GetPlayerFacing = originalFacing
-    local arrowTool = CornerTool("arrow")
-    assert(arrowTool.toolID == "arrow" and arrowTool.reference == panel.arrowToggle)
-    arrowTool.scripts.OnClick(arrowTool, "LeftButton")
-    assert(settings.vignetteRadarRouteArrow == false and not widget:IsShown(),
-        "the radar's crystal button must turn the separate route arrow off")
-    arrowTool.scripts.OnClick(arrowTool, "LeftButton")
-    assert(settings.vignetteRadarRouteArrow == true and widget:IsShown(),
-        "the same radar button must restore the route arrow")
-    UIParent:SetSize(800, 600)
-    widget.left, widget.top = 500, 80
-    settings.vignetteRadarRouteHorizonExpanded = true
-    addon.VignetteRadarRouteArrow.Refresh()
-    assert(widget.width == 260 and widget.height == 212 and widget.horizon:IsShown()
-        and widget.horizon.title.text == "Upcoming Stops"
-        and widget.horizon.why.width == 58 and widget.horizon.lock.width == 116
-        and widget.horizon.skip.width == 116
-        and widget.horizon.rows[1].text == "Now  Crystal Cache"
-        and widget.horizon.rows[2].text == "Next  Silvermaw"
-        and widget.horizon.lock.statusSurface.edge[1].vertexColor[4] >= .48
-        and widget.point[5] >= -600 + 212 + 8,
-        "the expanded route horizon must rise into view when the arrow is near the bottom edge")
-    settings.vignetteRadarRouteHorizonExpanded = false
-    widget.left, widget.top = nil, nil
-    addon.VignetteRadarRouteArrow.Refresh()
-    UIParent:SetSize(1600, 900)
-    routeStep.worldX, routeStep.worldY = snapshot.worldX, snapshot.worldY + 300
-    widget.scripts.OnUpdate(widget, .21)
-    assert(math.abs(widget.pointer.rotation - initialRotation - math.pi / 2) < .01,
-        "the movable arrow must keep turning without a full radar redraw")
-    widget.left, widget.top = 220, 600
-    widget.scripts.OnDragStart(widget)
-    assert(widget.moving, "left-drag must move only the route widget")
-    widget.scripts.OnDragStop(widget)
-    assert(not widget.moving and settings.vignetteRadarRouteArrowPosition.x == 220
-        and settings.vignetteRadarRouteArrowPosition.y == -300,
-        "dropping the route widget must save its separate screen position")
-    widget.scripts.OnClick(widget, "RightButton")
-    assert(quick.pages["Auto Route"]:IsShown(),
-        "right-clicking the route widget should open its compact settings")
-    local questData = addon.VignetteRadarQuestData
-    local originalObjective = questData.GetObjectiveSummary
-    local originalSkip = focus.SkipRouteStop
-    local skipped = 0
-    questData.GetObjectiveSummary = function() return { label = "Collect Shredder Parts", count = "2/5" } end
-    focus.SkipRouteStop = function() skipped = skipped + 1; return true end
-    routeStep.questID = 991
-    focus.GetRoutePoint = function() return routeStep, "quest", "Quest Route", 1, 1 end
-    addon.VignetteRadarRouteArrow.Refresh()
-    assert(widget.width == 260 and widget.height == 139
-        and widget.node.height == 82
-        and widget.node.objective.text == "Collect Shredder Parts"
-        and widget.node.count.text == "Objective · 2/5"
-        and widget.next.point[5] == -120,
-        "a quest objective should grow the movable note and show its current count")
-    focus.GetHorizon = function()
-        return { { name = "First Quest", label = "Meet Riftblade Maella" },
-            { name = "First Quest", label = "Collect Shredder Parts" } }
+    -- The route card is now the Guide Panel (tests/guide_panel_test.lua);
+    -- the radar's arrow corner tool switches it.
+    do
+        local arrowTool = CornerTool("arrow")
+        assert(arrowTool.toolID == "arrow" and arrowTool.reference == panel.arrowToggle)
+        arrowTool.scripts.OnClick(arrowTool, "LeftButton")
+        assert(addon.GetSettings().vignetteRadarGuidePanel == false,
+            "the radar's crystal button must turn the Guide Panel off")
+        arrowTool.scripts.OnClick(arrowTool, "LeftButton")
+        assert(addon.GetSettings().vignetteRadarGuidePanel == true,
+            "the same radar button must turn the Guide Panel back on")
     end
-    settings.vignetteRadarRouteHorizonExpanded = true
-    addon.VignetteRadarRouteArrow.Refresh()
-    assert(widget.horizon.rows[1].text == "Now  Meet Riftblade Maella"
-        and widget.horizon.rows[2].text == "Next  Collect Shredder Parts"
-        and widget.next.text == "Next  Collect Shredder Parts",
-        "quest routes must display distinct objective steps instead of repeating the quest title")
-    focus.GetHorizon = function()
-        return { { name = "Crystal Cache" }, { name = "Silvermaw" } }
-    end
-    UIParent:SetSize(800, 600)
-    widget.left, widget.top = 600, 90
-    settings.vignetteRadarRouteHorizonExpanded = true
-    addon.VignetteRadarRouteArrow.Refresh()
-    assert(widget.height == 265 and widget.point[4] <= 532
-        and widget.point[5] >= -600 + 265 + 8,
-        "the expanded objective note must stay inside an 800x600 screen")
-    settings.vignetteRadarRouteHorizonExpanded = false
-    widget.left, widget.top = nil, nil
-    UIParent:SetSize(1600, 900)
-    addon.VignetteRadarRouteArrow.Refresh()
-    widget.scripts.OnClick(widget, "MiddleButton")
-    assert(skipped == 1 and widget.clickButtons[3] == "MiddleButtonUp",
-        "middle-clicking the movable note should skip one route stop")
-    focus.GetRoutePoint = function() return routeStep, "treasure", "Treasure Route", 2, 3 end
-    addon.VignetteRadarRouteArrow.Refresh()
-    assert(widget.width == 160 and widget.height == 86 and not widget.node.objective:IsShown(),
-        "the movable note should return to its compact form for other stops")
-    focus.SkipRouteStop = originalSkip
-    questData.GetObjectiveSummary = originalObjective
-    settings.vignetteRadarRouteArrow = false
-    addon.VignetteRadarAPI.Refresh(false)
-    assert(not widget:IsShown(), "turning off the standalone route arrow must hide it")
-    settings.vignetteRadarRouteArrow = true
-    routeStep.instanceID = (snapshot.instanceID or 0) + 1
-    addon.VignetteRadarAPI.Refresh(false)
-    assert(not widget:IsShown(),
-        "the movable arrow must hide a stop in another world instance")
-    routeStep.instanceID = snapshot.instanceID
     focus.GetRoutePoint = function() return nil end
     addon.VignetteRadarAPI.Refresh(false)
-    assert(not widget:IsShown() and not panel.activeCueHit:IsShown(),
-        "paused routes must hide their arrow and radar cue hit target")
-    addon.VignetteRadarRouteArrow.ResetPosition()
-    assert(settings.vignetteRadarRouteArrowPosition == nil and widget.point[1] == "CENTER",
-        "reset positions must recenter the independently movable arrow")
+    assert(not panel.activeCueHit:IsShown(), "paused routes must hide the radar cue hit target")
     focus.GetRoutePoint = originalRoutePoint
+    addon.VignetteRadarTray = nil
     focus.GetTrackedRouteKind = originalTrackedKind
     focus.GetHorizon = originalHorizon
     addon.VignetteRadarAPI.Refresh(false)
@@ -3006,7 +3145,17 @@ local dashX = firstTrailMark.endPoint[3] - firstTrailMark.startPoint[3]
 local dashY = firstTrailMark.endPoint[4] - firstTrailMark.startPoint[4]
 panel.trailToggle.scripts.OnClick(panel.trailToggle, "RightButton")
 local trailPopup = assert(_G.VignetteRadarTrailStylePopup)
-assert(trailPopup:IsShown() and trailPopup.width == 244 and trailPopup.height == 360
+do
+    -- The popup also switches the Trails mode (Follow / Lead / Both).
+    local modes = trailPopup.modeButtons
+    assert(modes and #modes == 4 and modes[3].mode == "lead", "the trail popup offers Off, Follow, Lead and Both")
+    local before = settings.vignetteRadarTrailMode
+    modes[3].scripts.OnClick(modes[3])
+    assert(settings.vignetteRadarTrailMode == "lead" and modes[3]._selected and not modes[2]._selected,
+        "Lead switches the trail mode and stays marked")
+    addon.SetVignetteRadarTrailMode(before)
+end
+assert(trailPopup:IsShown() and trailPopup.width == 244 and trailPopup.height == 388
     and trailPopup.clamped and settings.vignetteRadarTrailStyle == "dashes"
     and not trailPopup.rail
     and trailPopup.point[1] == "BOTTOMLEFT" and trailPopup.point[2] == panel
@@ -3080,19 +3229,16 @@ for _, control in ipairs(trailPopup.controls) do
 end
 local tenYards = quickControl("Auto Route", "vignetteRadarAutoRouteArrivalRadius", 10)
 do
-    local routeArrowCheck = quickControl("Auto Route", "vignetteRadarRouteArrow")
+    local routeArrowCheck = quickControl("Auto Route", "vignetteRadarAutoRouteOnSelect")
     local worldPinCheck = quickControl("Auto Route", "vignetteRadarWorldFocusThemedWaypoint")
     assert(routeArrowCheck and worldPinCheck
         and routeArrowCheck.label.parent.point[4] + routeArrowCheck.label.parent.width
-            < worldPinCheck.point[4]
-        and worldPinCheck.label.parent.point[4] + worldPinCheck.label.parent.width
-            <= quick.width - 14,
-        "the mini route arrow toggle must fit beside the world-pin toggle")
+            <= routeArrowCheck.point[4],
+        "an Auto Route toggle label must stop before its checkbox")
 end
-assert(tenYards and tenYards.width == 80 and tenYards.point[4] == 14
-    and -quick.pages["Auto Route"].status.point[5]
-        + quick.pages["Auto Route"].status.height <= quick.pages["Auto Route"].height - 10,
-    "the ten-yard route setting and status must fit inside the compact panel")
+assert(tenYards and tenYards.parent.isRow and tenYards.point[4] + tenYards.width <= tenYards.parent.width - 8
+    and quick.routeStatus and quick.routeStatus.parent.isRow,
+    "the ten-yard route setting and status must fit inside the Auto Route card")
 local tailMinus = trailPopup.controls[5].minus
 local originalSetEnabled = tailMinus.SetEnabled
 local enableCalls = 0
@@ -3278,9 +3424,15 @@ assert(firstTrailMark.startPoint[3] == flowingStart
 addon.SetVignetteRadarTrailStyle("dots")
 panel.trailToggle.scripts.OnClick(panel.trailToggle, "LeftButton")
 assert(not settings.vignetteRadarBreadcrumbs and not panel.trailToggle._selected
-    and not panel.trailDots[1]:IsShown()
-    and not quickControl("Explore", "vignetteRadarBreadcrumbs").checked,
+    and not panel.trailDots[1]:IsShown(),
     "left-click must hide the trail and update settings immediately")
+-- The hidden settings panel skips refreshes; opening it (OnShow) must show the new state.
+assert(not quick:IsShown())
+quick:Show(); quick.scripts.OnShow(quick)
+assert(settings.vignetteRadarTrailMode == "off"
+    and quickControl("Explore", "vignetteRadarTrailMode", "off").highlightLocked
+    and not quickControl("Explore", "vignetteRadarTrailMode", "follow").highlightLocked,
+    "reopening settings must show the trail turned off")
 panel.trailToggle.scripts.OnClick(panel.trailToggle, "RightButton")
 assert(trailPopup:IsShown() and not settings.vignetteRadarBreadcrumbs
     and settings.vignetteRadarTrailStyle == "dots",
@@ -3305,7 +3457,7 @@ local oldButtonLeft, oldButtonRight, oldButtonTop = panel.trailToggle.left,
     panel.trailToggle.right, panel.trailToggle.top
 UIParent:SetSize(800, 600)
 panel.left, panel.right = 213, 587
-panel.trailToggle.left, panel.trailToggle.right, panel.trailToggle.top = 459, 481, 215
+panel.trailToggle.left, panel.trailToggle.right, panel.trailToggle.top = 459, 481, 190
 panel.trailToggle.scripts.OnClick(panel.trailToggle, "RightButton")
 assert(trailPopup.point[1] == "BOTTOMLEFT" and trailPopup.point[2] == panel.trailToggle
     and trailPopup.point[3] == "TOPLEFT" and trailPopup.point[5] == 8,
@@ -3354,10 +3506,11 @@ HandyNotes = { plugins = {
         end, { [51005000] = { label = "Other zone note", group = "misc" } }, nil
     end },
 }, db = { profile = { enabledPlugins = { TestPack = true, OtherPack = true } } } }
-quick.tabs["Map Data"].scripts.OnClick(quick.tabs["Map Data"])
+quick:Show() -- tabs are only clickable on a visible panel
+quickAPI.OpenPage("Map Data")
 local testPackRow
 for _, row in ipairs(quick.poiRows) do if row.sourceID == "TestPack" then testPackRow = row end end
-assert(quick.pages["Map Data"]:IsShown() and testPackRow,
+assert(quickShowsCard("Map Data") and testPackRow,
     "the map-data tab must list each available pack for a single-source choice")
 assert(testPackRow.point[4] + testPackRow.width + 8 <= quick.poiTrack.point[4],
     "the map-data scrollbar must keep a visible gutter from pack buttons")
@@ -3382,7 +3535,7 @@ quick.poiRows[1].scripts.OnMouseWheel(quick.poiRows[1], -1)
 assert(quick.poiOffset == 1 and quick.poiThumb.point[5] < 0,
     "the pack list must scroll while the pointer is over a source button")
 quick.poiRows[1].scripts.OnMouseWheel(quick.poiRows[1], 1)
-assert(quick.pages["Source Fusion"]
+assert(quick.cards["Markers/Source Fusion"]
     and quickControl("Source Fusion", "vignetteRadarSourceFusion"),
     "Source Fusion must have a visible settings page")
 settings.vignetteRadarFusionSources = { "TestPack", "ZPack1" }
@@ -3497,7 +3650,7 @@ local noteX, noteY = panel.mapNotes[1].point[4], panel.mapNotes[1].point[5]
 assert(noteX * noteX + noteY * noteY <= (panel.plotRadius - 5)^2,
     "map-note dots must stay inside the radar's plotting boundary")
 local packIconToggle = assert(quickControl("Map Data", "vignetteRadarPOIIcons"))
-local clearedToggle = assert(quickControl("Map Data", "vignetteRadarHideCleared"))
+local clearedToggle = assert(quickControl("Behavior", "vignetteRadarHideCleared"))
 local radarEvents
 for _, object in ipairs(objects) do
     if object.events and object.events.VIGNETTES_UPDATED then radarEvents = object end
@@ -3542,6 +3695,8 @@ assert(not panel.mapNotes[1]:IsShown(), "type filters must hide only that map-no
 settings.vignetteRadarPOITypes.note = true
 mapID, now = 903, 1311
 addon.VignetteRadarAPI.Refresh(true)
+-- Radar refreshes skip the hidden settings panel; it refreshes when opened.
+addon.VignetteRadarQuickConfig.Refresh()
 assert(not panel.mapNotes[1]:IsShown() and quick.poiStatus.text:find("no notes here", 1, true),
     "a manually chosen pack must not leak into a different zone")
 settings.vignetteRadarPOISource = "auto"
@@ -3617,7 +3772,10 @@ launcher:Show()
 
 local outsideClickEvents
 for _, object in ipairs(objects) do
-    if object.events and object.events.GLOBAL_MOUSE_DOWN then outsideClickEvents = object end
+    -- (The tray's own click-away frame also listens for UI scale changes.)
+    if object.events and object.events.GLOBAL_MOUSE_DOWN and not object.events.UI_SCALE_CHANGED then
+        outsideClickEvents = object
+    end
 end
 assert(outsideClickEvents and outsideClickEvents.scripts.OnEvent,
     "radar popups need a click-outside event without a polling frame")
@@ -3777,5 +3935,64 @@ assert(not addon.VignetteRadarBudget.softThrottle,
     "a sustained quiet period must restore the user's selected update rate")
 debugprofilestop = nil
 C_Timer.After = originalTimerAfter
+
+-- Duplicate Icons: the radar reads one hide table per render from the
+-- Minimap Underlay and leaves out the marker kinds the minimap draws.
+do
+    local savedUnderlay, savedGuids, iconsPosition = addon.VignetteRadarMinimapUnderlay, guids, livePositions.treasure
+    local iconsRange = settings.vignetteRadarRange
+    local hide
+    addon.VignetteRadarMinimapUnderlay = {
+        Sync = function(range) return range end,
+        ShowsTerrain = function() return hide ~= nil end,
+        RadarHides = function() return hide end,
+        FaceAlpha = function() return .94 end,
+        BaseAlpha = function() return .94 end,
+        IsActive = function() return hide ~= nil end,
+    }
+    local function ShownTreasures()
+        local count = 0
+        for _, blip in pairs(panel.blipByKey) do
+            if blip:IsShown() and blip.target and blip.target.category == "treasure" then count = count + 1 end
+        end
+        return count
+    end
+    settings.vignetteRadarRange = 450
+    livePositions.treasure = { x = .52, y = .5 }
+    guids = { "treasure" }
+    addon.VignetteRadarAPI.Refresh(true)
+    assert(ShownTreasures() == 1, "a live treasure draws with no underlay hide table")
+    hide = { staticPOIs = true, label = "plain map spots hidden" }
+    addon.VignetteRadarAPI.Refresh(false)
+    assert(ShownTreasures() == 1 and panel._underlayHide == hide, "Split By Type keeps live treasures")
+    hide = { areaPOIs = true, vignettes = true, quests = true, label = "minimap-drawn kinds hidden" }
+    addon.VignetteRadarAPI.Refresh(false)
+    assert(ShownTreasures() == 0, "Minimap Wins hides live vignettes")
+    assert(panel._underlayHide == hide and panel._underlayHideTraced == hide, "the hide table is cached on the panel")
+    hide = nil
+    addon.VignetteRadarAPI.Refresh(false)
+    assert(ShownTreasures() == 1 and panel._underlayHide == nil, "terrain off: every marker is back")
+    addon.VignetteRadarMinimapUnderlay = savedUnderlay
+    guids, livePositions.treasure, settings.vignetteRadarRange = savedGuids, iconsPosition, iconsRange
+    addon.VignetteRadarAPI.Refresh(true)
+end
+
+-- No Controls button anywhere in the built UI may cut its label: the label
+-- has no fixed width and its measured text fits inside the button.
+;(function()
+    local overfull = {}
+    for _, object in ipairs(objects) do
+        local label = object.label
+        if object.kind == "Button" and object.fitsLabel and label and label.kind == "FontString"
+            and object.point and (label.text or "") ~= "" then
+            local need = addon.VignetteRadarStyle.TextWidth(label)
+            if label.width or need > (object.width or 0) - 10 + .01 then
+                overfull[#overfull + 1] = string.format("%q needs %.0f, has %.0f", label.text, need,
+                    (object.width or 0) - 10)
+            end
+        end
+    end
+    assert(#overfull == 0, "button labels would truncate:\n" .. table.concat(overfull, "\n"))
+end)()
 
 io.write("vignette radar UI tests passed\n")

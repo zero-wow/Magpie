@@ -29,6 +29,9 @@ C_Map = {
     ClearUserWaypoint = function() waypoint = nil end,
 }
 C_SuperTrack = { SetSuperTrackedUserWaypoint = function() end }
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
+assert(loadfile("Core/Points.lua"))("VignetteRadar", addon)
+assert(loadfile("Data/QuestService.lua"))("VignetteRadar", addon)
 assert(loadfile("Routes/WorldFocus.lua"))("VignetteRadar", addon)
 local focus = addon.VignetteRadarWorldFocus
 local function Step(x)
@@ -149,6 +152,7 @@ assert(not focus.IsRouteActive(), "a manually replaced waypoint must stop Auto R
 
 local questA, questNext, questB = Step(350), Step(500), Step(700)
 settings.vignetteRadarAutoRouteQuestNearest = false -- Preserve the legacy same-quest route scenario below.
+settings.vignetteRadarAutoRouteQuestMoveOn = "each" -- Legacy: each finished objective picks a new stop.
 settings.vignetteRadarAutoRouteNearbyZones = false
 settings.vignetteRadarAutoRouteQuestStarts = false
 questA.questID, questNext.questID, questB.questID = 11, 11, 22
@@ -214,16 +218,16 @@ focus.Sync(123, { worldX = nil, worldY = nil, instanceID = 42 },
 focus.Sync(123, player, {}, { questA, questNext, questB }, {})
 questDone[11] = true
 focus.Sync(123, player, {}, { questA, questNext, questB }, {})
-assert(waypoint.position.x == .5,
-    "finishing objectives must not skip a quest before its turn-in")
+assert(waypoint.position.x == .7, "a quest with every objective done should advance to the next available quest")
 questActive[11], questTurnedIn[11] = nil, true
 focus.Sync(123, player, {}, { questA, questNext, questB }, {})
-assert(waypoint.position.x == .7, "a completed quest should advance to the next available quest")
+assert(waypoint.position.x == .7, "turning in the finished quest must not move the route again")
 assert(not focus.PreviousQuestStep() and waypoint.position.x == .7,
     "the back hotkey must not reopen a quest that was already turned in")
 assert(focus.IsQuestRoute() and focus.SkipQuest()
     and not focus.IsRouteActive() and not focus.HasFocus() and waypoint == nil,
     "Skip Quest should move past a stuck quest and clear the final owned pin")
+settings.vignetteRadarAutoRouteQuestMoveOn = nil
 
 local objectiveFar, objectiveNear, objectiveNext = Step(400), Step(320), Step(520)
 for _, objective in ipairs({ objectiveFar, objectiveNear, objectiveNext }) do
@@ -536,8 +540,12 @@ do
         "Closest should start at the nearest eligible point and expose its actual type")
     progress.finished = true
     focus.Sync(123, player, { rare }, { objective }, { cache })
+    assert(waypoint.position.x == .315 and select(2, focus.GetRoutePoint()) == "quest",
+        "a completed objective must keep the quest as the Closest stop until turn-in")
+    questActive[99], questTurnedIn[99] = false, true
+    focus.Sync(123, player, { rare }, { objective }, { cache })
     assert(waypoint.position.x == .32 and select(2, focus.GetRoutePoint()) == "treasure",
-        "a completed objective should let Closest choose the next nearest type")
+        "turning the quest in should let Closest choose the next nearest type")
     player.worldX = 316.9
     focus.Sync(123, player, { rare }, { objective }, { cache })
     assert(waypoint.position.x == .32,
@@ -589,6 +597,7 @@ do
 end
 do
     focus.Clear()
+    settings.vignetteRadarAutoRouteQuestMoveOn = "each" -- Old per-objective advancing.
     settings.vignetteRadarAutoRouteQuestNearest = true
     settings.vignetteRadarAutoRouteQuestStarts = true
     settings.vignetteRadarAutoRouteNearbyZones = true
@@ -637,6 +646,7 @@ do
     assert(waypoint.uiMapID == 124 and focus.GetRoutePoint().questID == 304,
         "the waiting quest route should pin a known objective in the next zone")
     assert(focus.Clear())
+    settings.vignetteRadarAutoRouteQuestMoveOn = nil
 end
 do
     focus.Clear()
@@ -679,6 +689,7 @@ do
     settings.vignetteRadarAutoRouteQuestNearest = false
     settings.vignetteRadarAutoRouteQuestStarts = false
     settings.vignetteRadarAutoRouteNearbyZones = false
+    settings.vignetteRadarAutoRouteQuestMoveOn = "each" -- Old per-objective waiting.
     local first, later = Step(320), Step(460)
     first.questID, first.name = 308, "First stage"
     later.kind, later.questID, later.name = "quest", 308, "Next stage"
@@ -717,6 +728,7 @@ do
         and diagnostic.questID == 308 and diagnostic.radarPoints == 1,
         "diagnostics should report the route's cached state")
     assert(focus.Clear())
+    settings.vignetteRadarAutoRouteQuestMoveOn = nil
 end
 do
     focus.Clear()
@@ -874,6 +886,668 @@ do
     assert(restored.SelectQuest(998) and routeNotes[#routeNotes][3]
         and routeNotes[#routeNotes][3].count == "2/5",
         "selecting a quest objective should send its progress to the rounded route note")
+end
+
+do
+    settings.vignetteRadarAutoRouteRestore = false
+    settings.vignetteRadarAutoRouteWasActive = false
+    assert(loadfile("Routes/WorldFocus.lua"))("VignetteRadar", addon)
+    local fresh = addon.VignetteRadarWorldFocus
+    local me = { worldX = 300, worldY = 500, instanceID = 42 }
+    local first, second = Step(310), Step(520)
+    first.key, first.name, first.category = "stop-first", "First stop", "rare"
+    second.key, second.name, second.category = "stop-second", "Second stop", "rare"
+    fresh.Sync(123, me, { first, second }, {}, {})
+    assert(fresh.StartNearest("rare") and fresh.IsRouteActive()
+        and settings.vignetteRadarAutoRouteWasActive)
+    local canSet = C_Map.CanSetUserWaypointOnMap
+    C_Map.CanSetUserWaypointOnMap = function() return false end
+    assert(not fresh.SkipRouteStop(), "a stop that cannot be placed must fail the advance")
+    C_Map.CanSetUserWaypointOnMap = canSet
+    assert(not fresh.IsRouteActive() and not settings.vignetteRadarAutoRouteWasActive,
+        "a failed advance must stop and forget the route")
+    assert(routeNotes[#routeNotes][2]:find("Route stopped", 1, true),
+        "a failed advance must say the route stopped")
+
+    fresh.Clear(true)
+    assert(fresh.SelectNote(first) and waypoint and waypoint.position.x == .31)
+    settings.vignetteRadarWorldFocusEnabled = false
+    fresh.Sync(123, me, { first, second }, {}, {})
+    assert(waypoint == nil and not fresh.HasFocus(),
+        "disabling World Focus must clear its owned Blizzard waypoint")
+    settings.vignetteRadarWorldFocusEnabled = true
+end
+
+-- Close arrival choices: 3 and 5 yards for single picks and Auto Route.
+do
+    settings.vignetteRadarAutoRouteRestore = false
+    settings.vignetteRadarAutoRouteWasActive = false
+    assert(loadfile("Routes/WorldFocus.lua"))("VignetteRadar", addon)
+    local close = addon.VignetteRadarWorldFocus
+    local recent = addon.VignetteRadarRecent
+    addon.VignetteRadarRecent = { IsHidden = function() return false end }
+    local me = { worldX = 300, worldY = 500, instanceID = 42 }
+    local spot = Step(600)
+    spot.kind, spot.key, spot.name = "rare", "close:spot", "Close spot"
+    settings.vignetteRadarWorldFocusArrivalRadius = 3
+    close.Sync(123, me, {}, {}, {})
+    assert(close.SelectPoint(spot) and close.HasFocus())
+    me.worldX = 596.5
+    close.Sync(123, me, {}, {}, {})
+    assert(close.HasFocus(), "a 3 yard pick must stay at 3.5 yards")
+    me.worldX = 597.1
+    close.Sync(123, me, {}, {}, {})
+    assert(not close.HasFocus(), "a 3 yard pick should arrive inside 3 yards")
+
+    settings.vignetteRadarWorldFocusArrivalRadius = 5
+    me.worldX = 300
+    close.Sync(123, me, {}, {}, {})
+    assert(close.SelectPoint(spot))
+    me.worldX = 594.5
+    close.Sync(123, me, {}, {}, {})
+    assert(close.HasFocus(), "a 5 yard pick must stay at 5.5 yards")
+    me.worldX = 595.1
+    close.Sync(123, me, {}, {}, {})
+    assert(not close.HasFocus(), "a 5 yard pick should arrive inside 5 yards")
+
+    -- Auto Route: a cleared rare advances only inside the 5 yard setting.
+    settings.vignetteRadarAutoRouteArrivalRadius = 5
+    local closeA, closeB = Step(600), Step(800)
+    closeA.kind, closeA.key, closeA.name, closeA.category = "rare", "close:a", "Rare A", "rare"
+    closeB.kind, closeB.key, closeB.name, closeB.category = "rare", "close:b", "Rare B", "rare"
+    me.worldX = 300
+    close.Sync(123, me, { closeA, closeB }, {}, {})
+    assert(close.StartNearest("rare") and waypoint.position.x == .6)
+    addon.VignetteRadarRecent = { IsHidden = function(item) return item.key == closeA.key end }
+    me.worldX = 594.5
+    close.Sync(123, me, { closeA, closeB }, {}, {})
+    assert(waypoint.position.x == .6, "a cleared rare at 5.5 yards must not advance a 5 yard route")
+    me.worldX = 595.1
+    close.Sync(123, me, { closeA, closeB }, {}, {})
+    assert(waypoint.position.x == .8, "a cleared rare inside 5 yards should advance the route")
+    close.Clear(true)
+    addon.VignetteRadarRecent = recent
+    settings.vignetteRadarWorldFocusArrivalRadius = 20
+    settings.vignetteRadarAutoRouteArrivalRadius = 10
+end
+
+-- Keep Marker Until Looted Or Killed holds rare and treasure stops.
+do
+    settings.vignetteRadarAutoRouteRestore = false
+    settings.vignetteRadarAutoRouteWasActive = false
+    settings.vignetteRadarKeepMarkerUntilDone = true
+    assert(loadfile("Routes/WorldFocus.lua"))("VignetteRadar", addon)
+    local keep = addon.VignetteRadarWorldFocus
+    local recent = addon.VignetteRadarRecent
+    addon.VignetteRadarRecent = { IsHidden = function() return false end }
+    local me = { worldX = 300, worldY = 500, instanceID = 42 }
+
+    -- A single treasure pick stays at the chest until its loot matches.
+    local chest = Step(500)
+    chest.kind, chest.key, chest.name, chest.objectID = "treasure", "keep:chest", "Kept cache", 555
+    keep.Sync(123, me, {}, {}, { chest })
+    assert(keep.SelectNote(chest) and keep.HasFocus())
+    me.worldX = 500
+    keep.Sync(123, me, {}, {}, { chest })
+    keep.Sync(123, me, {}, {}, { chest })
+    assert(keep.HasFocus() and waypoint.position.x == .5,
+        "a kept treasure must not count as arrived by distance")
+    assert(keep.ExplainActive():find("advances on matching loot", 1, true))
+    GetTime = function() return 200 end
+    GetNumLootItems = function() return 1 end
+    GetLootSourceInfo = function() return "GameObject-0-1-1-1-999-000" end
+    keep.OnLootEvent("LOOT_OPENED")
+    assert(not keep.OnLootEvent("LOOT_SLOT_CLEARED") and keep.HasFocus(),
+        "another container must not release a kept treasure")
+    GetLootSourceInfo = function() return "GameObject-0-1-1-1-555-000" end
+    keep.OnLootEvent("LOOT_OPENED")
+    assert(keep.OnLootEvent("LOOT_SLOT_CLEARED") and not keep.HasFocus(),
+        "looting the kept treasure should release its marker")
+
+    -- A treasure route holds at the chest, then advances on loot.
+    local mapNotes = settings.vignetteRadarAutoRouteMapNotes
+    settings.vignetteRadarAutoRouteMapNotes = true
+    local first, second = Step(500), Step(700)
+    first.kind, first.key, first.name, first.objectID = "treasure", "keep:first", "First kept", 556
+    second.kind, second.key, second.name = "treasure", "keep:second", "Second kept"
+    me.worldX = 300
+    keep.Sync(123, me, {}, {}, { first, second })
+    assert(keep.SelectNote(first) and keep.ToggleRoute() and waypoint.position.x == .5)
+    me.worldX = 500
+    keep.Sync(123, me, {}, {}, { first, second })
+    assert(waypoint.position.x == .5 and keep.IsRouteActive(),
+        "a kept treasure route stop must wait at the chest")
+    GetLootSourceInfo = function() return "GameObject-0-1-1-1-556-000" end
+    keep.OnLootEvent("LOOT_OPENED")
+    assert(keep.OnLootEvent("LOOT_SLOT_CLEARED") and waypoint.position.x == .7,
+        "looting a kept treasure route stop should advance the route")
+    keep.Clear(true)
+    settings.vignetteRadarAutoRouteMapNotes = mapNotes
+
+    -- A live rare stays until its vignette dies or disappears nearby.
+    local rare, other = Step(600), Step(800)
+    rare.kind, rare.key, rare.name, rare.category = "rare", "keep:rare", "Kept rare", "rare"
+    other.kind, other.key, other.name, other.category = "rare", "keep:other", "Other rare", "rare"
+    me.worldX = 300
+    keep.Sync(123, me, { rare, other }, {}, {})
+    assert(keep.SelectTarget(rare) and keep.HasFocus())
+    me.worldX = 600
+    keep.Sync(123, me, { rare, other }, {}, {})
+    assert(keep.HasFocus(), "a kept rare must not count as arrived by distance")
+    rare.isDead = true
+    keep.Sync(123, me, { rare, other }, {}, {})
+    assert(not keep.HasFocus(), "a dead kept rare should release its marker")
+    rare.isDead = nil
+
+    me.worldX = 300
+    keep.Sync(123, me, { rare, other }, {}, {})
+    assert(keep.SelectTarget(rare) and keep.ToggleRoute() and waypoint.position.x == .6)
+    me.worldX = 600
+    keep.Sync(123, me, { rare, other }, {}, {})
+    assert(waypoint.position.x == .6, "a kept rare route stop waits while the rare lives")
+    keep.Sync(123, me, { other }, {}, {})
+    assert(waypoint.position.x == .8 and keep.IsRouteActive(),
+        "a kept rare whose vignette vanished nearby should advance the route")
+    keep.Clear(true)
+    addon.VignetteRadarRecent = recent
+    settings.vignetteRadarKeepMarkerUntilDone = false
+end
+
+-- Quest stops: Blizzard super-track far away, a pinned exact spot inside
+-- the quest area, and back, without dropping the route.
+do
+    settings.vignetteRadarAutoRouteRestore = false
+    settings.vignetteRadarAutoRouteWasActive = false
+    local savedQuestLog, savedSuperTrack = C_QuestLog, C_SuperTrack
+    local trackedQuest, trackingUser = 7, false
+    C_SuperTrack = {
+        GetSuperTrackedQuestID = function() return trackedQuest end,
+        SetSuperTrackedQuestID = function(id) trackedQuest, trackingUser = id, false end,
+        SetSuperTrackedUserWaypoint = function(on) trackingUser = on == true end,
+        IsSuperTrackingUserWaypoint = function() return trackingUser end,
+    }
+    C_QuestLog = {
+        GetLogIndexForQuestID = function() return 1 end,
+        GetQuestWatchType = function() return 0 end,
+        IsOnQuest = function() return true end,
+        GetQuestObjectives = function() return { { finished = false, numFulfilled = 1 } } end,
+    }
+    local inArea = false
+    addon.VignetteRadarQuestData = {
+        IsQuestInArea = function() return inArea end,
+        GetNextStep = function() return nil end,
+    }
+    assert(loadfile("Routes/WorldFocus.lua"))("VignetteRadar", addon)
+    local quest = addon.VignetteRadarWorldFocus
+    local me = { worldX = 100, worldY = 500, instanceID = 42 }
+    local spot = Step(600)
+    spot.questID, spot.name, spot.objectiveText = 4242, "Pinned Quest", "Find the spot"
+    waypoint = nil
+    quest.Sync(123, me, {}, { spot }, {})
+    assert(quest.SelectQuest(4242) and quest.ToggleRoute() and quest.IsRouteActive())
+    assert(trackedQuest == 4242 and not trackingUser and waypoint == nil
+        and not quest.IsQuestPinned(), "a far quest stop uses Blizzard super-tracking")
+
+    inArea = true
+    me.worldX = 300
+    quest.Sync(123, me, {}, { spot }, {})
+    assert(quest.IsQuestPinned() and trackingUser and waypoint
+        and waypoint.position.x == .6 and quest.IsRouteActive() and quest.HasFocus(),
+        "inside the quest area the stop should pin the exact objective spot")
+    quest.Sync(123, me, {}, { spot }, {})
+    assert(quest.IsQuestPinned() and quest.IsRouteActive(),
+        "the pinned spot must not look like an outside waypoint change")
+
+    local moved = Step(650)
+    moved.questID, moved.name, moved.objectiveText = 4242, "Pinned Quest", "Find the spot"
+    quest.Sync(123, me, {}, { moved }, {})
+    assert(quest.IsQuestPinned() and waypoint.position.x == .65 and quest.IsRouteActive(),
+        "a moved objective should move the pin")
+
+    inArea = false
+    me.worldX = 100
+    quest.Sync(123, me, {}, { moved }, {})
+    assert(not quest.IsQuestPinned() and trackedQuest == 4242 and not trackingUser
+        and waypoint == nil and quest.IsRouteActive() and quest.HasFocus(),
+        "leaving the area should hand back to super-track and keep the route")
+    quest.Sync(123, me, {}, { moved }, {})
+    assert(quest.IsRouteActive(), "the route must survive the swap back")
+
+    -- Close by distance alone also pins; Clear removes the pin and restores.
+    me.worldX = 630
+    quest.Sync(123, me, {}, { moved }, {})
+    assert(quest.IsQuestPinned() and waypoint.position.x == .65)
+    assert(quest.Clear(true) and waypoint == nil and trackedQuest == 7
+        and not quest.HasFocus(), "clearing a pinned quest stop restores the prior quest")
+
+    settings.vignetteRadarQuestPinWhenClose = false
+    me.worldX = 300
+    inArea = true
+    quest.Sync(123, me, {}, { spot }, {})
+    assert(quest.SelectQuest(4242))
+    quest.Sync(123, me, {}, { spot }, {})
+    assert(not quest.IsQuestPinned() and trackedQuest == 4242,
+        "turning the pin setting off keeps Blizzard super-tracking")
+    quest.Clear(true)
+    settings.vignetteRadarQuestPinWhenClose = nil
+    addon.VignetteRadarQuestData = nil
+    C_QuestLog, C_SuperTrack = savedQuestLog, savedSuperTrack
+end
+
+-- Closest route on a quest: turning the quest in drops Blizzard's quest
+-- super-track. That is quest progress, not an outside waypoint change, so
+-- the route must rescan, choose the next closest point and place it.
+do
+    settings.vignetteRadarAutoRouteRestore = false
+    settings.vignetteRadarAutoRouteWasActive = false
+    settings.vignetteRadarAutoRouteNearbyZones = false
+    settings.vignetteRadarAutoRouteQuestStarts = false
+    local savedMapNotes = settings.vignetteRadarAutoRouteMapNotes
+    settings.vignetteRadarAutoRouteMapNotes = true
+    local savedQuestLog, savedSuperTrack = C_QuestLog, C_SuperTrack
+    local savedRecent, savedMarker = addon.VignetteRadarRecent, addon.VignetteRadarWorldMarker
+    addon.VignetteRadarRecent = nil
+    local markerRefreshes = 0
+    addon.VignetteRadarWorldMarker = { Refresh = function() markerRefreshes = markerRefreshes + 1 end }
+    local trackedQuest, trackingUser = 0, false
+    C_SuperTrack = {
+        GetSuperTrackedQuestID = function() return trackedQuest end,
+        SetSuperTrackedQuestID = function(id) trackedQuest, trackingUser = id, false end,
+        SetSuperTrackedUserWaypoint = function(on) trackingUser = on == true end,
+        IsSuperTrackingUserWaypoint = function() return trackingUser end,
+    }
+    local onLog, turnedIn = { [5151] = true, [5252] = true }, {}
+    C_QuestLog = {
+        GetLogIndexForQuestID = function(id) return onLog[id] and 1 or nil end,
+        GetQuestWatchType = function() return 0 end,
+        IsOnQuest = function(id) return onLog[id] == true end,
+        IsQuestFlaggedCompleted = function(id) return turnedIn[id] == true end,
+        IsComplete = function() return false end,
+        GetQuestObjectives = function() return { { finished = false, numFulfilled = 0 } } end,
+    }
+    assert(loadfile("Routes/WorldFocus.lua"))("VignetteRadar", addon)
+    local closest = addon.VignetteRadarWorldFocus
+    local me = { worldX = 100, worldY = 500, instanceID = 42 }
+    local job = Step(600)
+    job.questID, job.name, job.objectiveText = 5151, "Finished Job", "Do the job"
+    local cache = Step(400)
+    cache.kind, cache.key, cache.name = "treasure", "closest:after-quest", "After cache"
+    waypoint = nil
+    closest.Sync(123, me, {}, { job }, {})
+    assert(closest.StartNearest("closest") and trackedQuest == 5151
+        and closest.IsRouteActive(), "Closest should start on the only quest")
+
+    -- Turn-in: the quest leaves the log and Blizzard drops its super-track.
+    onLog[5151], turnedIn[5151], trackedQuest = nil, true, 0
+    markerRefreshes = 0
+    closest.Sync(123, me, {}, {}, { cache })
+    assert(closest.IsRouteActive() and closest.GetRouteChoice() == "closest",
+        "a turned-in quest must not stop the Closest route")
+    assert(waypoint and waypoint.position.x == .4 and trackingUser
+        and closest.GetActiveTarget() and closest.GetActiveTarget().key == cache.key
+        and markerRefreshes > 0,
+        "a turned-in quest should pick and place the next closest point")
+
+    -- Nothing nearby yet: the route waits, then takes the first new point.
+    closest.Clear(true)
+    local job2 = Step(600)
+    job2.questID, job2.name, job2.objectiveText = 5252, "Second Job", "Do it again"
+    closest.Sync(123, me, {}, { job2 }, {})
+    assert(closest.StartNearest("closest") and trackedQuest == 5252)
+    onLog[5252], turnedIn[5252], trackedQuest = nil, true, 0
+    closest.Sync(123, me, {}, {}, {})
+    assert(closest.IsRouteActive() and closest.Status():find("Waiting for Nearby Points", 1, true),
+        "with no next point a turned-in quest should leave Closest waiting")
+    closest.Sync(123, me, {}, {}, {})
+    assert(closest.IsRouteActive(), "a waiting Closest route must survive later scans")
+    markerRefreshes = 0
+    closest.Sync(123, me, {}, {}, { cache })
+    assert(closest.IsRouteActive() and waypoint and waypoint.position.x == .4
+        and closest.GetActiveTarget().key == cache.key and markerRefreshes > 0
+        and not closest.Status():find("Waiting", 1, true),
+        "a waiting Closest route should pick and place the first point that appears")
+    closest.Clear(true)
+    settings.vignetteRadarAutoRouteMapNotes = savedMapNotes
+    addon.VignetteRadarRecent, addon.VignetteRadarWorldMarker = savedRecent, savedMarker
+    C_QuestLog, C_SuperTrack = savedQuestLog, savedSuperTrack
+end
+
+-- A quest stop is held until all its objectives are done: one finished
+-- objective keeps the quest super-tracked and the close pin follows
+-- Blizzard's next objective. "Move On After Each Objective" restores the old advance.
+do
+    settings.vignetteRadarAutoRouteRestore = false
+    settings.vignetteRadarAutoRouteWasActive = false
+    settings.vignetteRadarAutoRouteNearbyZones = false
+    settings.vignetteRadarAutoRouteQuestStarts = false
+    settings.vignetteRadarAutoRouteQuestMoveOn = nil
+    local savedMapNotes = settings.vignetteRadarAutoRouteMapNotes
+    settings.vignetteRadarAutoRouteMapNotes = true
+    local savedQuestLog, savedSuperTrack = C_QuestLog, C_SuperTrack
+    local savedRecent, savedMarker = addon.VignetteRadarRecent, addon.VignetteRadarWorldMarker
+    local savedData, savedPool = addon.VignetteRadarQuestData, addon.VignetteRadarRouteQuests
+    addon.VignetteRadarRecent = nil
+    addon.VignetteRadarWorldMarker = { Refresh = function() end }
+    local trackedQuest, trackingUser = 0, false
+    C_SuperTrack = {
+        GetSuperTrackedQuestID = function() return trackedQuest end,
+        SetSuperTrackedQuestID = function(id) trackedQuest, trackingUser = id, false end,
+        SetSuperTrackedUserWaypoint = function(on) trackingUser = on == true end,
+        IsSuperTrackingUserWaypoint = function() return trackingUser end,
+    }
+    local onLog, turnedIn, allDone = { [6161] = true, [6262] = true, [7171] = true }, {}, {}
+    local objectives = {
+        [6161] = { { finished = false, numFulfilled = 0 }, { finished = false, numFulfilled = 0 } },
+        [7171] = { { finished = false, numFulfilled = 0 }, { finished = false, numFulfilled = 0 } },
+    }
+    C_QuestLog = {
+        GetLogIndexForQuestID = function(id) return onLog[id] and 1 or nil end,
+        GetQuestWatchType = function() return 0 end,
+        IsOnQuest = function(id) return onLog[id] == true end,
+        IsQuestFlaggedCompleted = function(id) return turnedIn[id] == true end,
+        IsComplete = function(id) return allDone[id] == true end,
+        GetQuestObjectives = function(id)
+            return objectives[id] or { { finished = false, numFulfilled = 0 } }
+        end,
+    }
+    -- Blizzard's next point for the quest: nil until set below.
+    local nextX, inArea = nil, false
+    addon.VignetteRadarQuestData = {
+        IsQuestInArea = function() return inArea end,
+        GetNextStep = function(questID, mapID)
+            if questID == 6161 and nextX then
+                return { questID = questID, mapID = mapID, x = nextX / 1000, y = .5, onCurrentMap = true }
+            end
+        end,
+    }
+    addon.VignetteRadarRouteQuests = {
+        Tick = function() end,
+        Candidates = function() return {} end,
+        CurrentQuestWaypoint = function(id)
+            if id ~= 6161 or not nextX then return nil end
+            local point = Step(nextX)
+            point.kind, point.questID, point.name = "quest", 6161, "Held Job"
+            return point
+        end,
+    }
+    assert(loadfile("Routes/WorldFocus.lua"))("VignetteRadar", addon)
+    local held = addon.VignetteRadarWorldFocus
+    local me = { worldX = 100, worldY = 500, instanceID = 42 }
+    local job = Step(300)
+    job.questID, job.name, job.objectiveText = 6161, "Held Job", "Two things"
+    local other = Step(500)
+    other.questID, other.name = 6262, "Other Job"
+    local cache = Step(400)
+    cache.kind, cache.key, cache.name = "treasure", "held:cache", "Held cache"
+    waypoint = nil
+    held.Sync(123, me, {}, { job, other }, { cache })
+    assert(held.StartNearest("closest") and trackedQuest == 6161
+        and held.GetRoutePoint().questID == 6161, "Closest should start on the nearest quest")
+
+    -- One objective done: same stop, still super-tracked, nothing pinned yet.
+    objectives[6161][1].finished = true
+    held.Sync(123, me, {}, { job, other }, { cache })
+    assert(held.IsRouteActive() and held.GetRoutePoint().questID == 6161
+        and trackedQuest == 6161 and not trackingUser and waypoint == nil,
+        "finishing one objective must keep the quest stop and its super-track")
+
+    -- In the area, the close pin sits on Blizzard's next objective.
+    nextX, inArea, me.worldX = 350, true, 330
+    held.Sync(123, me, {}, { job, other }, { cache })
+    assert(held.IsQuestPinned() and waypoint and waypoint.position.x == .35
+        and held.GetRoutePoint().questID == 6161,
+        "the pin should follow the next objective, not the finished one")
+
+    -- All objectives done (IsComplete true, still in the log): the quest
+    -- stop is finished and the route moves to the next closest.
+    objectives[6161][2].finished, allDone[6161], trackedQuest, nextX, inArea = true, true, 0, nil, false
+    held.Sync(123, me, {}, { job, other }, { cache })
+    assert(held.IsRouteActive() and waypoint and waypoint.position.x == .4
+        and held.GetActiveTarget() and held.GetActiveTarget().key == cache.key,
+        "completing every objective should advance to the next closest point")
+    held.Clear(true)
+
+    -- Setting on: each finished objective advances, as before.
+    settings.vignetteRadarAutoRouteQuestMoveOn = "each"
+    me.worldX = 100
+    local job3 = Step(300)
+    job3.questID, job3.name = 7171, "Per Objective Job"
+    held.Sync(123, me, {}, { job3, other }, { cache })
+    assert(held.StartNearest("closest") and trackedQuest == 7171)
+    objectives[7171][1].finished = true
+    held.Sync(123, me, {}, { job3, other }, { cache })
+    assert(held.IsRouteActive() and waypoint and waypoint.position.x == .4
+        and held.GetActiveTarget().key == cache.key,
+        "Move On After Each Objective should advance on each finished objective")
+    held.Clear(true)
+
+    settings.vignetteRadarAutoRouteQuestMoveOn = nil
+    settings.vignetteRadarAutoRouteMapNotes = savedMapNotes
+    addon.VignetteRadarRecent, addon.VignetteRadarWorldMarker = savedRecent, savedMarker
+    addon.VignetteRadarQuestData, addon.VignetteRadarRouteQuests = savedData, savedPool
+    C_QuestLog, C_SuperTrack = savedQuestLog, savedSuperTrack
+end
+
+-- The last single pick survives /reload: a new module instance reading the
+-- same saved DB re-selects it, unless it is done, cleared, or a route wins.
+do
+    settings.vignetteRadarAutoRouteRestore = true
+    settings.vignetteRadarAutoRouteWasActive = false
+    settings.vignetteRadarAutoRouteLastKind = nil
+    settings.vignetteRadarAutoRouteOnSelect = false
+    settings.vignetteRadarLastFocus = nil
+    local savedQuestLog, savedSuperTrack = C_QuestLog, C_SuperTrack
+    local savedRecent, savedMarker = addon.VignetteRadarRecent, addon.VignetteRadarWorldMarker
+    local savedService = addon.VignetteRadarFocus
+    addon.VignetteRadarRecent, addon.VignetteRadarWorldMarker = nil, nil
+    local trackedQuest, trackingUser = 0, false
+    C_SuperTrack = {
+        GetSuperTrackedQuestID = function() return trackedQuest end,
+        SetSuperTrackedQuestID = function(id) trackedQuest, trackingUser = id, false end,
+        SetSuperTrackedUserWaypoint = function(on) trackingUser = on == true end,
+        IsSuperTrackingUserWaypoint = function() return trackingUser end,
+    }
+    local onLog, turnedIn = { [7001] = true, [7002] = true }, {}
+    C_QuestLog = {
+        GetLogIndexForQuestID = function(id) return onLog[id] and 1 or nil end,
+        GetQuestWatchType = function() return 0 end,
+        IsOnQuest = function(id) return onLog[id] == true end,
+        IsQuestFlaggedCompleted = function(id) return turnedIn[id] == true end,
+        IsComplete = function() return false end,
+        GetQuestObjectives = function() return { { finished = false, numFulfilled = 0 } } end,
+    }
+    -- A /reload: fresh Focus service and World Focus, same settings table.
+    local function Reload()
+        assert(loadfile("Core/Focus.lua"))("VignetteRadar", addon)
+        assert(loadfile("Routes/WorldFocus.lua"))("VignetteRadar", addon)
+        return addon.VignetteRadarWorldFocus, addon.VignetteRadarFocus
+    end
+    local me = { worldX = 100, worldY = 500, instanceID = 42 }
+    local hunt = Step(600)
+    hunt.questID, hunt.name, hunt.objectiveText = 7001, "Saved Hunt", "Hunt it"
+    local errand = Step(700)
+    errand.questID, errand.name, errand.objectiveText = 7002, "Saved Errand", "Run it"
+
+    -- Manual quest pick, then reload: it comes back on the first scan.
+    waypoint = nil
+    local world, service = Reload()
+    world.Sync(123, me, {}, { hunt }, {})
+    assert(service.Select(service.Quest(7001, hunt), { source = "test" }) and trackedQuest == 7001)
+    local record = settings.vignetteRadarLastFocus
+    assert(record and record.kind == "quest" and record.questID == 7001 and record.focusType == "quest",
+        "a manual quest pick should be saved for the next reload")
+    trackedQuest = 0
+    world, service = Reload()
+    assert(not world.HasFocus() and service.Get() == nil)
+    world.Sync(123, me, {}, { hunt }, {})
+    assert(world.HasFocus() and world.GetActiveTarget().questID == 7001 and trackedQuest == 7001
+        and not world.IsRouteActive(),
+        "a manual quest pick must be re-selected (super-track included) after /reload")
+    assert(service.GetQuest() == 7001, "the radar focus should come back with the pick")
+
+    -- Turned in before the next reload: not restored, and forgotten.
+    onLog[7001], turnedIn[7001], trackedQuest = nil, true, 0
+    world = Reload()
+    world.Sync(123, me, {}, {}, {})
+    assert(not world.HasFocus() and trackedQuest == 0 and settings.vignetteRadarLastFocus == nil,
+        "a completed quest must not be restored")
+
+    -- A manual clear forgets the pick.
+    world = Reload()
+    world.Sync(123, me, {}, { errand }, {})
+    assert(world.SelectQuest(7002) and settings.vignetteRadarLastFocus.questID == 7002)
+    assert(world.Clear() and settings.vignetteRadarLastFocus == nil,
+        "a manual clear must forget the saved pick")
+    world = Reload()
+    world.Sync(123, me, {}, { errand }, {})
+    assert(not world.HasFocus(), "a cleared pick must stay gone after /reload")
+
+    -- Blizzard kept the user waypoint through the reload: reuse it.
+    local cache = Step(200)
+    cache.kind, cache.key, cache.name, cache.source = "treasure", "pack:123:20005000", "Kept Cache", "pack"
+    world = Reload()
+    world.Sync(123, me, {}, {}, { cache })
+    assert(world.SelectNote(cache) and settings.vignetteRadarLastFocus.key == cache.key)
+    local placedBefore = #placed
+    world = Reload()
+    world.Sync(123, me, {}, {}, { cache })
+    assert(world.HasFocus() and world.GetActiveTarget().key == cache.key and #placed == placedBefore,
+        "a restored pick should reuse Blizzard's surviving waypoint, not place another")
+    world.Clear(true)
+
+    -- An Auto Route restore wins over the saved single pick.
+    world = Reload()
+    world.Sync(123, me, {}, { errand }, {})
+    assert(world.SelectQuest(7002) and settings.vignetteRadarLastFocus.questID == 7002)
+    settings.vignetteRadarAutoRouteWasActive, settings.vignetteRadarAutoRouteLastKind = true, "closest"
+    world = Reload()
+    world.Sync(123, me, {}, { errand }, { cache })
+    assert(world.IsRouteActive() and world.GetRouteChoice() == "closest"
+        and world.HasFocus() and settings.vignetteRadarLastFocus == nil,
+        "an Auto Route restore must win over the saved single pick")
+    world.Clear(true)
+
+    settings.vignetteRadarAutoRouteWasActive, settings.vignetteRadarAutoRouteLastKind = false, nil
+    settings.vignetteRadarLastFocus = nil
+    addon.VignetteRadarFocus = savedService
+    addon.VignetteRadarRecent, addon.VignetteRadarWorldMarker = savedRecent, savedMarker
+    C_QuestLog, C_SuperTrack = savedQuestLog, savedSuperTrack
+end
+
+-- Next 3 Stops Strip: a click on a later horizon stop jumps the route there,
+-- and the skipped current stop counts as visited.
+do
+    focus.Clear(true)
+    local near, middle, far = Step(320), Step(450), Step(600)
+    near.key, near.name, near.kind = "jump:near", "Near cache", "treasure"
+    middle.key, middle.name, middle.kind = "jump:middle", "Middle cache", "treasure"
+    far.key, far.name, far.kind = "jump:far", "Far cache", "treasure"
+    player.worldX, player.worldY, player.instanceID = 300, 500, 42
+    settings.vignetteRadarAutoRouteMapNotes = true
+    local savedRecent = addon.VignetteRadarRecent
+    addon.VignetteRadarRecent = nil
+    focus.Sync(123, player, {}, {}, { near, middle, far })
+    assert(not focus.JumpRouteStop(far), "a jump needs a running route")
+    local started = focus.StartNearest("treasure")
+    assert(started and focus.GetActiveTarget().key == "jump:near")
+    local horizon = focus.GetHorizon()
+    assert(#horizon == 3 and horizon[1].current and horizon[3].item.key == "jump:far",
+        "the horizon should preview three stops in route order")
+    assert(not focus.JumpRouteStop(horizon[1].item), "the current stop is not a jump target")
+    assert(focus.JumpRouteStop(horizon[3].item) and focus.GetActiveTarget().key == "jump:far"
+        and focus.IsRouteActive(), "a jump should make the chosen stop current and keep the route")
+    local after = focus.GetHorizon()
+    for _, stop in ipairs(after) do
+        assert(stop.item.key ~= "jump:near", "the skipped stop must count as visited")
+    end
+    focus.Clear(true)
+    addon.VignetteRadarRecent = savedRecent
+end
+
+-- Live Rare Follow: a live rare super-tracks its vignette; the stop follows
+-- the walking rare; the rare vanishing is progress, not a waypoint change.
+do
+    focus.Clear(true)
+    local savedSuperTrack = C_SuperTrack
+    local trackedVignette, cleared = nil, 0
+    C_SuperTrack = {
+        SetSuperTrackedUserWaypoint = function() trackedVignette = nil end,
+        SetSuperTrackedVignette = function(guid) trackedVignette = guid end,
+        GetSuperTrackedVignette = function() return trackedVignette end,
+        ClearAllSuperTracked = function() trackedVignette = nil; cleared = cleared + 1 end,
+    }
+    settings.vignetteRadarLiveRareFollow = true
+    local walker = Step(700)
+    walker.key, walker.name, walker.category = "Vignette-0-1-2-3-4-5", "Walking rare", "rare"
+    player.worldX, player.worldY, player.instanceID = 300, 500, 42
+    focus.Sync(123, player, { walker }, {}, {})
+    local placedBefore = #placed
+    assert(focus.SelectTarget(walker) and trackedVignette == walker.key and #placed == placedBefore,
+        "a live rare should super-track its vignette instead of placing a pin")
+    local moved = Step(760)
+    moved.key, moved.name, moved.category = walker.key, walker.name, "rare"
+    focus.Sync(123, player, { moved }, {}, {})
+    assert(focus.HasFocus() and focus.GetActiveTarget().worldX == 760,
+        "the followed stop takes the rare's latest position")
+    trackedVignette = nil
+    focus.Sync(123, player, {}, {}, {})
+    assert(not focus.HasFocus() and cleared == 0,
+        "a followed rare that vanished ends the focus without clearing someone else's track")
+    -- A vignette still up but no longer tracked: the person picked something else.
+    focus.Sync(123, player, { moved }, {}, {})
+    assert(focus.SelectTarget(moved) and trackedVignette == moved.key)
+    trackedVignette = "Vignette-other"
+    focus.Sync(123, player, { moved }, {}, {})
+    assert(not focus.HasFocus(), "an outside super-track change still drops the focus")
+    -- Switched off: the old pin.
+    settings.vignetteRadarLiveRareFollow = false
+    trackedVignette = nil
+    assert(focus.SelectTarget(moved) and trackedVignette == nil and #placed == placedBefore + 1,
+        "with the switch off a live rare gets a user waypoint")
+    focus.Clear(true)
+    -- Clear hands the vignette track back while it is still ours.
+    settings.vignetteRadarLiveRareFollow = true
+    assert(focus.SelectTarget(moved) and trackedVignette == moved.key)
+    assert(focus.Clear(true) and trackedVignette == nil and cleared == 1,
+        "clearing the focus clears our own vignette super-track")
+    settings.vignetteRadarLiveRareFollow = nil
+    C_SuperTrack = savedSuperTrack
+end
+
+-- ROUTE_CHANGED: Select, Skip, Lock and Clear tell the Guide Panel once
+-- each; a call that changes nothing stays quiet. Horizon labels show
+-- "Treasure · <Zone>" for a pack's stand-in "Treasure location".
+do
+    focus.Clear(true)
+    local savedBus, savedRecent, savedGetMapInfo = addon.Bus, addon.VignetteRadarRecent, C_Map.GetMapInfo
+    local fired = 0
+    addon.Bus = { Emit = function(topic) if topic == "ROUTE_CHANGED" then fired = fired + 1 end end,
+        On = function() end, InCombat = function() return false end }
+    addon.VignetteRadarRecent = nil
+    C_Map.GetMapInfo = function(mapID) return mapID == 123 and { name = "Zul'Aman" } or nil end
+    assert(loadfile("Core/Guidance.lua"))("VignetteRadar", addon)
+    local near, middle, far = Step(320), Step(450), Step(600)
+    near.key, near.name, near.kind = "changed:near", "Near cache", "treasure"
+    middle.key, middle.name, middle.kind = "changed:middle", "Treasure location", "treasure"
+    far.key, far.name, far.kind = "changed:far", "Far cache", "treasure"
+    player.worldX, player.worldY, player.instanceID = 300, 500, 42
+    focus.Sync(123, player, {}, {}, { near, middle, far })
+    fired = 0
+    focus.Sync(123, player, {}, {}, { near, middle, far })
+    assert(fired == 0, "a scan that changes nothing fires nothing")
+    assert(focus.StartNearest("treasure") and fired == 1, "starting a route fires once")
+    local horizon = focus.GetHorizon(4)
+    assert(#horizon == 3 and horizon[2].label == "Treasure · Zul'Aman",
+        "a stand-in pack name reads as kind and zone: " .. tostring(horizon[2] and horizon[2].label))
+    assert(#focus.GetHorizon() == 3 and #focus.GetHorizon(2) == 2 and focus.GetHorizon(2)[2] == horizon[2],
+        "a shorter horizon comes from the cached longer one")
+    assert(focus.ToggleRouteLock() and fired == 2, "locking the stop fires")
+    assert(focus.ToggleRouteLock() and fired == 3, "unlocking fires")
+    assert(focus.SkipRouteStop() and fired == 4, "skipping to the next stop fires")
+    assert(focus.Clear(true) and fired == 5, "clearing fires")
+    assert(not focus.Clear(true) and fired == 5, "clearing nothing fires nothing")
+    addon.Bus, addon.VignetteRadarRecent, C_Map.GetMapInfo = savedBus, savedRecent, savedGetMapInfo
+    addon.VignetteRadarGuidance = nil
 end
 
 io.write("vignette radar World Focus tests passed\n")

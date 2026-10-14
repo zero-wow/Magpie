@@ -31,6 +31,9 @@ function methods:SetBackdrop(...) end
 function methods:SetBackdropColor(...) end
 function methods:SetBackdropBorderColor(...) end
 function methods:SetColorTexture(...) end
+function methods:SetTexture(value) self.texture = value end
+function methods:SetTexCoord(...) self.texCoord = { ... } end
+function methods:SetVertexColor(...) self.vertexColor = { ... } end
 function methods:HighlightText() self.highlighted = true end
 function methods:SetFocus() self.focused = true end
 function methods:ClearFocus() self.focused = false end
@@ -73,7 +76,10 @@ local addon = {
         RefreshRoundedStatusSurface = function() end,
     },
 }
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile(enginePath))("VignetteRadar", addon)
+assert(loadfile("UI/Style.lua"))("VignetteRadar", addon)
+assert(loadfile("UI/IconButton.lua"))("VignetteRadar", addon)
 assert(loadfile(studioPath))("VignetteRadar", addon)
 local studio = assert(addon.VignetteRadarExpeditionStudio)
 

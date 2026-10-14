@@ -1,3 +1,7 @@
 *.zip
 .vscode/
 .idea/
+
+.serena/
+.luarc.json
+CONSTELLATION_HUD_PLAN.md

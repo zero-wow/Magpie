@@ -19,6 +19,7 @@ function methods:Show() self.shown = true end
 function methods:Hide() self.shown = false end
 function methods:IsShown() return self.shown == true end
 function methods:SetTexture(value) self.texture = value end
+function methods:SetTexCoord(...) self.texCoord = { ... } end
 function methods:SetVertexColor(...) self.color = { ... } end
 function methods:SetBackdrop(value) self.backdrop = value end
 function methods:SetBackdropColor(...) self.backdropColor = { ... } end
@@ -90,11 +91,17 @@ local addon = {
         end,
     },
 }
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
+assert(loadfile("UI/Style.lua"))("VignetteRadar", addon)
+assert(loadfile("UI/IconButton.lua"))("VignetteRadar", addon)
 assert(loadfile(path))("VignetteRadar", addon)
 local tracker = addon.VignetteRadarPlayerTracker
-assert(settings.vignetteRadarPlayerTrackerSeeded
-    and settings.vignetteRadarMarkedPlayers["soleet-wyrmrestaccord"]
-        == "Soleet-WyrmrestAccord", "Soleet must be the first persistent mark")
+assert(next(settings.vignetteRadarMarkedPlayers or {}) == nil
+    and settings.vignetteRadarPlayerTrackerSeeded == nil,
+    "a fresh profile must start with no marked players (no shipped seed)")
+assert(tracker.Mark("Soleet-WyrmrestAccord")
+    and settings.vignetteRadarMarkedPlayers["soleet-wyrmrestaccord"] == "Soleet-WyrmrestAccord",
+    "marking a character-realm must persist it")
 local events = tracker._EventFrame
 assert(events.events.NAME_PLATE_UNIT_ADDED and events.events.NAME_PLATE_UNIT_REMOVED
     and events.events.PLAYER_TARGET_CHANGED and events.events.UPDATE_MOUSEOVER_UNIT,

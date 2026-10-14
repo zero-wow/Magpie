@@ -1,20 +1,41 @@
 local _, addon = ...
 if type(addon) ~= "table" then return end
 
--- Owns optional feature lifetimes on the radar's existing event/scan path.
--- Nothing registers a new event or shares data until its user setting enables it.
+-- Owns optional feature lifetimes: login, leaving combat and logout arrive
+-- through the bus; scans arrive from the radar. Nothing registers a new event
+-- or shares data until its user setting enables it.
 local Runtime = {}
 addon.VignetteRadarFeatureRuntime = Runtime
 
 local initialized, party, surveyState = false, nil, {}
 local previousMapID, previousTargets = nil, {}
-local board, planner, collections, phaseLens, chainData
+local board, planner, phaseLens
 local director, soundCompass, lastSurveyFlush
 
-local function Safe(value)
-    if type(issecretvalue) ~= "function" then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and secret ~= true
+local Safe = addon.Secret.Safe
+
+-- Reused every Observe so the director update allocates nothing per scan.
+local directorSnapshot = { group = false, treasure = false, questing = false, travel = false }
+local DIRECTOR_CONTEXTS = {
+    travel = { enabled = true, range = 1200 },
+    questing = { enabled = true, range = 300 },
+    treasure = { enabled = true, range = 150 },
+    group = { enabled = true, range = 450 },
+}
+
+local function ApplyOverlay(overlay)
+    addon.VignetteRadarContextOverlay = overlay
+    return true
+end
+
+-- GetRoutePoint returns (step, kind). Call it directly: an `and` chain
+-- would cut the results to one value and lose kind.
+local function RoutePoint()
+    local focus = addon.VignetteRadarWorldFocus
+    local getPoint = focus and focus.GetRoutePoint
+    if type(getPoint) ~= "function" then return nil, nil, focus end
+    local step, kind = getPoint()
+    return step, kind, focus
 end
 
 local function Clock()
@@ -78,15 +99,9 @@ function Runtime.Initialize()
     end
     local resets = addon.VignetteRadarResetPlanner
     if resets then planner = resets.New(db.vignetteRadarResetPlannerData) end
-    local lens = addon.VignetteRadarCollectionLens
-    if lens then collections = lens.New(addon.VignetteRadarVerifiedRewardLinks or {}) end
     local phases = addon.VignetteRadarPhaseLens
     if phases then phaseLens = phases.New({ action = db.vignetteRadarPhaseLensAction or "show",
         heuristic = db.vignetteRadarPhaseHeuristics == true }) end
-    local chains = addon.VignetteRadarQuestChain
-    if chains and addon.VignetteRadarVerifiedQuestChains then
-        chainData = chains.Load(addon.VignetteRadarVerifiedQuestChains)
-    end
     local context = addon.VignetteRadarContextDirector
     if context then director = context.New({ enabled = false }) end
     local compass = addon.VignetteRadarSoundCompass
@@ -126,12 +141,7 @@ function Runtime.Configure()
     end
     if director then
         director:Configure({ enabled = db.vignetteRadarContextDirectorEnabled,
-            contexts = {
-                travel = { enabled = true, range = 1200 },
-                questing = { enabled = true, range = 300 },
-                treasure = { enabled = true, range = 150 },
-                group = { enabled = true, range = 450 },
-            } })
+            contexts = DIRECTOR_CONTEXTS })
     end
     if soundCompass then
         soundCompass:Configure({ enabled = db.vignetteRadarSoundCompassEnabled,
@@ -161,8 +171,7 @@ function Runtime.RefreshIntelligence()
     local character = CharacterKey()
     local name = type(UnitName) == "function" and UnitName("player") or character
     if not Safe(name) or type(name) ~= "string" then name = character end
-    local focus = addon.VignetteRadarWorldFocus
-    local step, kind = focus and focus.GetRoutePoint and focus.GetRoutePoint()
+    local step, kind, focus = RoutePoint()
     if not step and focus and focus.GetFocusedStep then
         step = focus.GetFocusedStep()
         kind = step and step.kind
@@ -194,7 +203,7 @@ function Runtime.RefreshIntelligence()
     end
     if planner then db.vignetteRadarResetPlannerData = planner:Export() end
     ui.SetContext({ board = board, resetPlanner = planner,
-        collectionLens = collections, phaseLens = phaseLens, chainData = chainData,
+        phaseLens = phaseLens,
         getNow = function() return epoch end,
         getCurrentCharacter = function() return character end,
         getResetPeriods = function() return {} end,
@@ -205,13 +214,7 @@ function Runtime.RefreshIntelligence()
                 return true
             end
             return false
-        end,
-        getQuestState = function(questID)
-            if QuestFlag("IsQuestFlaggedCompleted", questID) then return "complete" end
-            if QuestFlag("IsOnQuest", questID) then return "active" end
-            return "unknown"
-        end,
-        resolveQuestPoint = function() return nil end })
+        end })
     ui.SetSelection({ goalKey = goalKey, goalName = step and step.name,
         goalCategory = kind, sourceKey = step and (step.sourceID or step.key),
         point = step })
@@ -223,17 +226,14 @@ function Runtime.Observe(mapID, player, targets)
     local elapsed, epoch = Clock()
     if not (elapsed and epoch) then return end
     if director then
-        local focus = addon.VignetteRadarWorldFocus
-        local step, kind = focus and focus.GetRoutePoint and focus.GetRoutePoint()
-        local grouped = type(IsInGroup) == "function" and IsInGroup() == true
-        local mounted = type(IsMounted) == "function" and IsMounted() == true
-        director:Update({ group = grouped,
-            treasure = step and kind == "treasure" or false,
-            questing = step and kind == "quest" or false,
-            travel = mounted }, elapsed, function(overlay)
-                addon.VignetteRadarContextOverlay = overlay
-                return true
-            end, type(InCombatLockdown) == "function" and InCombatLockdown() == true)
+        local step, kind = RoutePoint()
+        local snapshot = directorSnapshot
+        snapshot.group = type(IsInGroup) == "function" and IsInGroup() == true
+        snapshot.treasure = step and kind == "treasure" or false
+        snapshot.questing = step and kind == "quest" or false
+        snapshot.travel = type(IsMounted) == "function" and IsMounted() == true
+        director:Update(snapshot, elapsed, ApplyOverlay,
+            addon.Bus and addon.Bus.InCombat() or false)
     end
     if not (surveyState.surveying or surveyState.recording) then return end
     local survey = addon.VignetteRadarSurveyReplay
@@ -274,9 +274,9 @@ function Runtime.ShareSighting(record, requested)
     return party:PublishSighting(record, requested)
 end
 
-function Runtime.ShareStop(record, requested)
+function Runtime.ShareStop(record, requested, explicit)
     if not (initialized and party) then return false, "Party Hunt unavailable" end
-    return party:PublishStop(record, requested)
+    return party:PublishStop(record, requested, explicit)
 end
 
 function Runtime.Shutdown()
@@ -286,6 +286,13 @@ function Runtime.Shutdown()
     if party then party:Stop() end
     initialized, party, surveyState = false, nil, {}
     previousMapID, previousTargets = nil, {}
-    board, planner, collections, phaseLens, chainData = nil, nil, nil, nil, nil
+    board, planner, phaseLens = nil, nil, nil
     director, soundCompass, lastSurveyFlush = nil, nil, nil
+end
+
+-- PartyHunt may defer a start or stop while in combat; leaving combat retries.
+if addon.Bus then
+    addon.Bus.On("LOGIN", function() Runtime.Initialize() end)
+    addon.Bus.On("PLAYER_REGEN_ENABLED", function() Runtime.Configure() end)
+    addon.Bus.On("LOGOUT", function() Runtime.Shutdown() end)
 end

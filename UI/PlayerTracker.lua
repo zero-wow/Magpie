@@ -5,34 +5,21 @@ local API = {}
 addon.VignetteRadarPlayerTracker = API
 
 local SKULL = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"
-local FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
-local SEED = "Soleet-WyrmrestAccord"
 local observed, plateMarks, radarMarks = {}, setmetatable({}, { __mode = "k" }), {}
 local panel, cachedSightings, nextPositionRead = nil, {}, 0
 local cachedMapID, cachedInstanceID
 
-local function Plain(value)
-    if type(issecretvalue) == "function" then
-        local ok, secret = pcall(issecretvalue, value)
-        if not ok or secret then return nil end
-    end
-    return value
-end
+local IsSecret, Number = addon.Secret.IsSecret, addon.Secret.Number
 
-local function Number(value)
-    value = Plain(value)
-    return type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge and value or nil
+local function Plain(value)
+    if IsSecret(value) then return nil end
+    return value
 end
 
 local function Settings()
     local db = addon.GetSettings()
     if type(db.vignetteRadarMarkedPlayers) ~= "table" then
         db.vignetteRadarMarkedPlayers = {}
-    end
-    if db.vignetteRadarPlayerTrackerSeeded ~= true then
-        db.vignetteRadarMarkedPlayers[SEED:lower()] = SEED
-        db.vignetteRadarPlayerTrackerSeeded = true
     end
     return db
 end
@@ -159,7 +146,7 @@ function API.Rescan()
         local ok, plates = pcall(C_NamePlate.GetNamePlates)
         if ok and type(Plain(plates)) == "table" then
             for _, plate in ipairs(plates) do
-                local read, unit = pcall(function() return plate.unitToken end)
+                local read, unit = pcall(function() return plate.unitToken or plate.namePlateUnitToken end)
                 if read and type(Plain(unit)) == "string" then RefreshUnit(unit) end
             end
         end
@@ -303,7 +290,7 @@ end
 
 local function Text(parent, value, x, y, size)
     local label = parent:CreateFontString(nil, "OVERLAY")
-    label:SetFont(FONT, size or 10, "")
+    addon.VignetteRadarStyle.SetFont(label, size or 10, "")
     label:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     label:SetText(value)
     return label
@@ -326,9 +313,9 @@ local function EnsurePanel()
     panel.title = Text(panel, "Player Tracker", 13, -11, 12)
     panel.title:SetTextColor(1, .31, .27, 1)
     panel.status = Text(panel, "", 13, -32, 9)
-    local close = controls.Button(panel, "×", 22, 20)
+    local close = addon.VignetteRadarIconButton.Create(panel, "close", { size = 20,
+        label = "Close", onClick = function() panel:Hide() end })
     close:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -9, -8)
-    close:SetScript("OnClick", function() panel:Hide() end)
     local target = controls.Button(panel, "Mark Current Target", 310, 22)
     target:SetPoint("TOPLEFT", panel, "TOPLEFT", 14, -52)
     target:SetScript("OnClick", function()
@@ -342,7 +329,7 @@ local function EnsurePanel()
         edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
     panel.input:SetBackdropColor(.03, .045, .05, 1)
     panel.input:SetBackdropBorderColor(.5, .35, .34, .8)
-    panel.input:SetFont(FONT, 10, "")
+    addon.VignetteRadarStyle.SetFont(panel.input, 10, "")
     panel.input:SetTextInsets(7, 7, 0, 0)
     panel.input:SetAutoFocus(false)
     panel.input:SetMaxLetters(80)

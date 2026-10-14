@@ -53,4 +53,26 @@ assert(B.Status("mapNotes").level == 1,
     "a single stalled layer should get an immediate limited backoff")
 assert(B.Status("render").level == 0,
     "layer backoff must not indiscriminately throttle the whole radar")
+
+-- An error between Begin and Finish must not leave the layer dead forever.
+now = 40
+clock = 200
+local lostParent = B.Begin("render", true)
+local lostChild = B.Begin("trail", true)
+assert(lostParent and lostChild)
+clock = 210
+local healed = B.Begin("render", true)
+assert(healed == lostParent and healed.running and healed.parent == nil,
+    "a layer whose Finish was skipped must recover on the next Begin")
+assert(not lostChild.running, "stale nested layers must be unwound with their parent")
+local healedChild = B.Begin("trail", true)
+assert(healedChild and healedChild.parent == healed,
+    "recovered layers must nest under the live parent")
+B.Finish(healedChild)
+B.Finish(healed)
+local again = B.Begin("render", true)
+local againChild = B.Begin("trail", true)
+assert(again and againChild, "both layers must keep running after recovery")
+B.Finish(againChild)
+B.Finish(again)
 print("VignetteRadar layer-budget tests passed")

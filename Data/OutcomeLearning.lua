@@ -7,24 +7,16 @@ local API = {}
 addon.VignetteRadarOutcomeLearning = API
 
 local MAX_ENTRIES, MAX_SAMPLES, MAX_WATCHES, MAX_OBJECTIVES = 256, 3, 40, 16
+-- alive maps a live rare's key to { item = target, rewardDone = ..., seenAt = ... }.
+-- The wrapper keeps our state off the radar's live target tables.
 local alive, questState, questPoints = {}, {}, {}
 local hasBaseline = false
 
-local function Number(value)
-    if type(issecretvalue) == "function" and issecretvalue(value) then return nil end
-    return type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge and value or nil
-end
+local Number, Field = addon.Secret.Number, addon.Secret.Field
 
 local function ID(value)
     value = Number(value)
     return value and value > 0 and value % 1 == 0 and value or nil
-end
-
-local function Field(record, key)
-    if type(record) ~= "table" then return nil end
-    local ok, value = pcall(function() return record[key] end)
-    return ok and not (issecretvalue and issecretvalue(value)) and value or nil
 end
 
 local function Snapshot()
@@ -141,19 +133,19 @@ function API.Sync(liveTargets, activeQuests)
         local item = liveTargets[index]
         if item and item.isDead ~= true and (item.category == "rare" or item.isWorldBoss)
             and type(item.key) == "string" then
-            local previous = alive[item.key]
-            if previous then item._outcomeRewardDone = previous._outcomeRewardDone
-            else item._outcomeRewardDone = RewardComplete(item.rewardQuestID) end
-            item._outcomeSeenAt = now
-            current[item.key] = item
+            local entry = alive[item.key]
+            if entry then entry.item = item
+            else entry = { item = item, rewardDone = RewardComplete(item.rewardQuestID) } end
+            entry.seenAt = now
+            current[item.key] = entry
         end
     end
     -- Keep a just-vanished live rare through the brief quest-event debounce.
     -- Disappearance itself never creates a kill observation.
     for guid, previous in pairs(alive) do
-        if not current[guid] and Number(previous._outcomeSeenAt)
-            and now >= previous._outcomeSeenAt
-            and now - previous._outcomeSeenAt <= 5 then
+        if not current[guid] and Number(previous.seenAt)
+            and now >= previous.seenAt
+            and now - previous.seenAt <= 5 then
             current[guid] = previous
         end
     end
@@ -163,10 +155,10 @@ function API.Sync(liveTargets, activeQuests)
 end
 
 function API.OnDeadVignette(vignetteGUID, info)
-    local source = type(vignetteGUID) == "string" and alive[vignetteGUID] or nil
-    if not source then return false end
+    local entry = type(vignetteGUID) == "string" and alive[vignetteGUID] or nil
+    if not entry then return false end
     alive[vignetteGUID] = nil
-    return RecordRare(source, info, Snapshot())
+    return RecordRare(entry.item, info, Snapshot())
 end
 
 local function ReadObjectives(questID)
@@ -221,12 +213,12 @@ end
 function API.OnQuestEvent(recordProgress, eventSnapshot)
     if recordProgress then
         local rareSnapshot = eventSnapshot
-        for guid, source in pairs(alive) do
-            if source._outcomeRewardDone == false
-                and RewardComplete(source.rewardQuestID) == true then
+        for guid, entry in pairs(alive) do
+            if entry.rewardDone == false
+                and RewardComplete(entry.item.rewardQuestID) == true then
                 rareSnapshot = rareSnapshot or Snapshot()
-                if RecordRare(source, nil, rareSnapshot) then alive[guid] = nil
-                else source._outcomeRewardDone = true end
+                if RecordRare(entry.item, nil, rareSnapshot) then alive[guid] = nil
+                else entry.rewardDone = true end
             end
         end
     end

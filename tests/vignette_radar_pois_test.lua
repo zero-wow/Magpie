@@ -1,6 +1,7 @@
 local addon = {}
 local settings = { vignetteRadarPOIZoneSources = {} }
 addon.GetSettings = function() return settings end
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile("Data/POIs.lua"))("VignetteRadar", addon)
 local pois = addon.VignetteRadarPOIs
 assert(#pois.Sources() == 0 and #pois.Collect(123, "Missing", function() end, function() end) == 0)
@@ -240,4 +241,76 @@ local beforeRescan = calls
 pois.Invalidate()
 pois.ZoneSources(123)
 assert(calls > beforeRescan, "manual rescan must refresh cached pack availability")
+
+-- Auto source must pick up a pack that handles the zone but is not ready yet,
+-- a pack enabled after the last probe, and notes that appear a moment later.
+do
+    local savedHandyNotes, savedZygor, savedMap = HandyNotes, ZygorGuidesViewer, C_Map
+    ZygorGuidesViewer = nil
+    C_Map = { GetMapInfo = function(mapID)
+        if mapID == 300 then return { name = "Midnight", parentMapID = 0, mapType = 3 } end
+        return { parentMapID = 0, mapType = 3 }
+    end }
+    local fresh = {}
+    fresh.GetSettings = function() return { vignetteRadarPOIZoneSources = {} } end
+    assert(loadfile("Core/Secret.lua"))("VignetteRadar", fresh)
+    assert(loadfile("Data/POIs.lua"))("VignetteRadar", fresh)
+    local autoPOIs = fresh.VignetteRadarPOIs
+    local ready = false
+    local zoneNodes = { [40004000] = { label = "Sunken chest", group = { { name = "treasures" } } } }
+    -- Zarillion-style: a handled map returns its node table even when the
+    -- iterator yields nothing yet (phasing, groups or data not ready).
+    local function Pack(handled)
+        return { GetNodes2 = function(_, mapID)
+            if not handled[mapID] then return function() return nil end, nil, nil end
+            local nodes = handled[mapID]
+            return function(state, previous)
+                if not ready then return nil end
+                local coord = next(state, previous)
+                if coord then return coord, nil, nil, 1, 1 end
+                return nil
+            end, nodes, nil
+        end }
+    end
+    local enabled = { HandyNotes_Midnight = true, HandyNotes_TheWarWithin = false }
+    HandyNotes = { plugins = {
+        HandyNotes_Midnight = Pack({ [300] = zoneNodes }),
+        HandyNotes_TheWarWithin = Pack({ [301] = zoneNodes }),
+    }, db = { profile = { enabledPlugins = enabled } } }
+    local function Convert(_, vector) return vector.x * 1000, vector.y * 1000, 1 end
+    local function Vector(x, y) return { x = x, y = y } end
+
+    local source, map = autoPOIs.ResolveSource(300, "auto")
+    assert(source == "HandyNotes_Midnight" and map == 300,
+        "Auto must pick an enabled pack that handles this zone before its notes are visible")
+    ready = true
+    assert(#autoPOIs.Collect(map, source, Convert, Vector) == 1,
+        "the auto-picked pack must deliver notes as soon as they become visible")
+    assert(autoPOIs.ZoneSources(300)[1].count == 0, "within the cache window the snapshot is reused")
+    now = now + 3
+    assert(autoPOIs.ZoneSources(300)[1].count == 1,
+        "an empty probe must only be cached briefly so counts catch up")
+
+    ready = true
+    assert(#autoPOIs.ZoneSources(301) == 0)
+    enabled.HandyNotes_TheWarWithin = true
+    source = autoPOIs.ResolveSource(301, "auto")
+    assert(source == "HandyNotes_TheWarWithin",
+        "enabling a pack in HandyNotes must refresh the cached zone sources at once")
+
+    ready = false
+    HandyNotes.plugins.HandyNotes_Silvermoon = { GetNodes2 = function(_, mapID)
+        if mapID ~= 300 then return function() return nil end, nil, nil end
+        local done = false
+        return function()
+            if done then return nil end
+            done = true
+            return 45004500, nil, nil, 1, 1
+        end, { [45004500] = { label = "Visible" } }, nil
+    end }
+    source = autoPOIs.ResolveSource(300, "auto")
+    assert(source == "HandyNotes_Silvermoon",
+        "a pack with visible notes must beat a handled pack that shows nothing yet")
+    HandyNotes, ZygorGuidesViewer, C_Map = savedHandyNotes, savedZygor, savedMap
+end
 io.write("vignette radar map-note tests passed\n")

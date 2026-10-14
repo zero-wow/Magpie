@@ -1,4 +1,4 @@
-# Vignette Radar: Major Feature Blueprint
+# Magpie: Major Feature Blueprint
 
 Status: implementation in progress on Retail 12.x. This document defines the intended behavior and release checks for 17 proposed features; code presence alone does not satisfy the in-game proof gates.
 
@@ -33,7 +33,7 @@ The dev.97 build delivered Source Fusion and the first Living Atlas view. The de
 
 ## 3. Party Hunt
 
-**Experience.** Group members with Vignette Radar may share a fresh sighting, a chosen destination, or an Expedition stop. A shared report has the sender, age, map, and an expiry badge. It is never styled as a locally verified live detection until the local client sees it.
+**Experience.** Group members with Magpie may share a fresh sighting, a chosen destination, or an Expedition stop. A shared report has the sender, age, map, and an expiry badge. It is never styled as a locally verified live detection until the local client sees it.
 
 **System.** Opt-in, versioned addon messages with deduplication, rate limits, and expiry. Send only small location and identity records; do not stream movement, inventory, or full routes continuously. Mark phase or instance compatibility as unknown when it cannot be verified.
 

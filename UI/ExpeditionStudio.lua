@@ -10,7 +10,6 @@ local WIDTH, HEIGHT, PAGE_SIZE = 570, 500, 5
 local MAX_CANDIDATES, MAX_IMPORT_BYTES = 256, 24576
 local KINDS = { rare = true, treasure = true, quest = true, pin = true }
 local CANDIDATE_KINDS = { "rare", "treasure", "quest" }
-local FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
 local engine, panel, card, cardAnchor, draft, player, onApply, estimateTravel
 local candidates = { rare = {}, treasure = {}, quest = {} }
 local cursor = { rare = 1, treasure = 1, quest = 1 }
@@ -28,26 +27,11 @@ local function Settings()
     return ok and type(db) == "table" and db or nil
 end
 
-local function Safe(value)
-    if type(issecretvalue) ~= "function" then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and not secret
-end
-
-local function Field(value, key)
-    if type(value) ~= "table" or not Safe(value) then return nil end
-    local ok, result = pcall(function() return value[key] end)
-    return ok and Safe(result) and result or nil
-end
-
-local function Number(value)
-    return Safe(value) and type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge and value or nil
-end
+local Safe, Field, Number = addon.Secret.Safe, addon.Secret.Field, addon.Secret.Number
 
 local function Label(parent, text, x, y, width, size)
     local label = parent:CreateFontString(nil, "OVERLAY")
-    label:SetFont(FONT, size or 10, "")
+    addon.VignetteRadarStyle.SetFont(label, size or 10, "")
     label:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     label:SetSize(width, 18)
     label:SetTextColor(.79, .87, .89, 1)
@@ -155,7 +139,7 @@ function API.SetOnApply(callback)
     onApply = type(callback) == "function" and callback or nil
 end
 
--- The callback receives (player, goal) and may return a TravelAware-style
+-- The callback receives (player, goal) and may return a travel
 -- { costYards, basis, reason } estimate. It is evaluated only when the Studio
 -- refreshes or applies, never by an OnUpdate script.
 function API.SetEstimateTravel(callback)
@@ -499,11 +483,16 @@ local function EnsureCard()
     local controls = addon.VignetteRadarControls
     if controls then controls.RoundedStatusSurface(card) end
     card.title = Label(card, "Expedition", 12, -9, 170, 11)
-    card.open = Button(card, "Studio", 208, -7, 48, function() API.Open() end)
-    card.hide = Button(card, "X", 266, -7, 22, function() API.SetCardVisible(false) end)
+    local icons = addon.VignetteRadarIconButton
+    card.open = icons.Create(card, "list", { size = 20, label = "Open Studio",
+        tooltip = "Plan, order and share this expedition's goals.", onClick = function() API.Open() end })
+    card.open:SetPoint("TOPLEFT", card, "TOPLEFT", 240, -7)
+    card.hide = icons.Create(card, "close", { size = 20, label = "Hide Card",
+        onClick = function() API.SetCardVisible(false) end })
+    card.hide:SetPoint("TOPLEFT", card, "TOPLEFT", 266, -7)
     Rule(card, -32)
-    card.now = Label(card, "", 12, -38, 276, 10)
-    card.next = Label(card, "", 12, -59, 276, 10)
+    card.now = Label(card, "", 12, -38, 276, 9)
+    card.next = Label(card, "", 12, -59, 276, 9)
     card.progress = Label(card, "", 12, -80, 276, 9)
     card.skip = Button(card, "Skip Current", 12, -102, 112, function()
         local ok, err = API.SkipCurrent()
@@ -621,7 +610,9 @@ local function EnsureUI()
     end
     if addon.VignetteRadarControls then addon.VignetteRadarControls.PopupSurface(panel) end
     panel.title = Label(panel, "Expedition Studio", 18, -10, 400, 12)
-    panel.close = Button(panel, "X", WIDTH - 42, -8, 24, function() API.Close() end)
+    panel.close = addon.VignetteRadarIconButton.Create(panel, "close", { size = 20,
+        label = "Close Studio", onClick = function() API.Close() end })
+    panel.close:SetPoint("TOPLEFT", panel, "TOPLEFT", WIDTH - 40, -9)
     Rule(panel, -37)
     panel.candidateHeader = Label(panel, "Add Current Goals", 18, -46, 300, 10)
     panel.candidateRows = {}
@@ -708,7 +699,7 @@ local function EnsureUI()
     transfer.input:SetPoint("TOPLEFT", transfer, "TOPLEFT", 16, -62)
     transfer.input:SetMultiLine(true)
     transfer.input:SetAutoFocus(false)
-    transfer.input:SetFontObject(ChatFontNormal or GameFontNormal)
+    addon.VignetteRadarStyle.SetFont(transfer.input, 11, "")
     transfer.input:SetTextInsets(8, 8, 7, 7)
     transfer.input:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8X8",

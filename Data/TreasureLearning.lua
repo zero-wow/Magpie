@@ -11,11 +11,7 @@ local MAX_ENTRIES, MAX_SAMPLES, MAX_LOOT_SLOTS = 256, 3, 32
 local targets, notes, player = {}, {}, nil
 local session
 
-local function Number(value)
-    if type(issecretvalue) == "function" and issecretvalue(value) then return nil end
-    return type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge and value or nil
-end
+local Number = addon.Secret.Number
 
 local function Snapshot()
     local radar = addon.VignetteRadarAPI
@@ -187,6 +183,7 @@ function API.OnLootEvent(event)
     if not distance or distance > (completed.match.rank > 1 and 80 or 6) then return false end
     return Record(completed.match, snapshot)
 end
+if addon.Bus then addon.Bus.On("LOOT", function(event) API.OnLootEvent(event) end) end
 
 function API.Count()
     local entries = Entries()

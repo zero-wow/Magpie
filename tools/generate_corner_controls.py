@@ -120,6 +120,13 @@ def icon_distance(icon, x, y):
                    segment(x, y, -8, 3, -2, -7, 1.1),
                    segment(x, y, 2, -7, 8, 1, 1.1),
                    segment(x, y, 8, 5, 2, 9, 1.1))
+    if icon == "minimap":
+        # Minimap Underlay: a round map with a terrain ridge and a north tick.
+        return min(abs(math.hypot(x, y) - 10) - 1.5,
+                   segment(x, y, -7, 3, -3, -2, 1.4),
+                   segment(x, y, -3, -2, 1, 2, 1.4),
+                   segment(x, y, 1, 2, 6, -4, 1.4),
+                   segment(x, y, 0, -15, 0, -11, 1.5))
     if icon == "rare":
         return min(*(segment(x, y, math.cos(a) * 4, math.sin(a) * 4,
                              math.cos(a) * 11, math.sin(a) * 11, 1.7)
@@ -191,3 +198,5 @@ def write_atlas(icons, name):
 
 write_atlas(ICONS, "radar-corner-controls.tga")
 write_atlas(ROUTE_ICONS, "radar-route-types.tga")
+# One cell, same four state rows, for the Minimap Underlay corner toggle.
+write_atlas(("minimap",), "radar-minimap-underlay.tga")

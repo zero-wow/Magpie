@@ -8,22 +8,7 @@ addon.VignetteRadarWarbandBoard = API
 local MAX_CHARACTERS, MAX_GOALS, MAX_REWARDS = 16, 256, 512
 local DEFAULT_STALE = 7 * 86400
 
-local function Safe(value)
-    if type(issecretvalue) ~= "function" then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and secret ~= true
-end
-
-local function Field(value, key)
-    if not Safe(value) or type(value) ~= "table" then return nil end
-    local ok, result = pcall(function() return value[key] end)
-    if ok and Safe(result) then return result end
-end
-
-local function Text(value, limit)
-    return Safe(value) and type(value) == "string" and #value > 0
-        and #value <= limit and value or nil
-end
+local Safe, Field, Text = addon.Secret.Safe, addon.Secret.Field, addon.Secret.Text
 
 local function Timestamp(value)
     return Safe(value) and type(value) == "number" and value == value

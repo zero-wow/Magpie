@@ -1,0 +1,17 @@
+# Constellation HUD concept provenance
+
+Generated with the built-in image generation tool on 2026-09-26. This is concept art, not in-game footage, an exact layout specification, or a runtime texture. The selected edited image is saved as `concept.png` next to this file. See the [Constellation HUD instructions](../../README.md#constellation-hud) for the implemented controls.
+
+## Original prompt
+
+Use case: ui-mockup
+Asset type: preview-only concept illustration for a proposed World of Warcraft addon feature; not a real game screenshot or implemented interface.
+Primary request: Show a beautiful restrained transparent holographic constellation sphere/dome centered around a third-person fantasy adventurer, inspired by the feeling of a science-fiction celestial navigation display.
+Scene/backdrop: widescreen 16:9 fantasy game view, small armored adventurer centered, seen from behind on a grassy path, distant hills and ruins, muted dusk daylight; environment clearly visible through the overlay. No Star Trek characters, no logos.
+Subject: a large elegant cyan-teal wireframe sphere about 600 pixels wide at 1536-pixel image width, centered near the character. Only a few fine translucent meridian arcs and latitude arcs. A tilted equatorial mapping disk passes through the sphere center and the player's center dot. Three fine elliptical distance rings on this disk. Six small rare, treasure and quest markers live ON THE SAME TILTED DISK, with subtle depth scale and opacity, not at invented altitudes, not attached to the distant landscape. Keep the central character and path unobscured; no filled sphere surface. One gold diamond treasure marker is highlighted at forward-right on the disk with a short readable label "Treasure · 92 yd". Tiny faint route line only toward that selected marker, no lines connecting unrelated objects.
+Composition: central gameplay area occupies almost all the image. A small rounded teal radar widget at upper right has tiny existing controls and one clear highlighted orbit/sphere icon labeled "Constellation". This is an illustrative radar, not an exact current UI. Near the bottom center of the hologram put restrained small typography "Heading Up · 450 yd". Top left place the small clear title "CONSTELLATION HUD" and subtitle "Concept · Not in-game footage". Bottom left a small legend with two labels "Live" using a filled point and "Saved location" using a hollow point.
+Style: premium game UI concept art, extremely clean thin lines, quiet crystal accents, readable category markers. Sphere itself is around 15 percent opacity, markers brighter. Atmospheric but practical. No thick sci-fi borders, no dashboard boxes, no HUD clutter, no dramatic flare, no spaceship, no terrain mesh, no floating markers implying measured object altitude. The overlay is transparent but the final image is a complete composited scene with an opaque scenic background.
+
+## Final correction prompt
+
+Edit this concept mockup only to remove potentially misleading numerical sample labels. Remove the three small distance labels '300 yd', '600 yd', and '900 yd' from the central rings entirely, preserving the thin rings. Change the gold marker text 'Treasure · 92 yd' to just 'Treasure'. Preserve every other element, all geometry, the 'Concept · Not in-game footage' subtitle, the scene, character, sphere, colors, and the bottom 'Heading Up · 450 yd' status unchanged.

@@ -5,6 +5,7 @@ GetServerTime = function() return epoch end
 GetTime = function() return elapsed end
 local completed = {}
 C_QuestLog = { IsQuestFlaggedCompleted = function(id) return completed[id] == true end }
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile("Core/Recent.lua"))("VignetteRadar", addon)
 local recent = addon.VignetteRadarRecent
 local rare = { category = "rare", npcID = 123, rewardQuestID = 900 }

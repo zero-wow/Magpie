@@ -8,37 +8,26 @@ local Intelligence = {}
 addon.VignetteRadarIntelligence = Intelligence
 
 local WIDTH, HEIGHT, MAX_ROWS = 510, 388, 6
-local FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
 local WHITE = "Interface\\Buttons\\WHITE8X8"
-local TABS = { "Warband", "Resets", "Collections", "Phase", "Quest Chains" }
+-- Today is the everyday view; the three evidence tabs show only with
+-- Advanced Tools on (Today replaces them for most players).
+local TABS = { "Today", "Warband", "Resets", "Phase" }
 local ENABLE_KEYS = {
     Warband = "vignetteRadarWarbandBoardEnabled",
     Resets = "vignetteRadarResetPlannerEnabled",
-    Collections = "vignetteRadarCollectionLensEnabled",
     Phase = "vignetteRadarPhaseLensEnabled",
-    ["Quest Chains"] = "vignetteRadarQuestChainEnabled",
 }
 local context, selection = {}, {}
-local panel, currentTab = nil, "Warband"
+local panel, currentTab = nil, "Today"
+local todayPage, todayPages = 1, 1
+local TODAY_FILTERS = { "left", "done", "all" }
+local TODAY_FILTER_NAMES = { left = "Left", done = "Done", all = "All" }
 local resetActionMessage
 
-local function Safe(value)
-    if type(issecretvalue) ~= "function" then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and secret ~= true
-end
-
-local function Field(record, key)
-    if not Safe(record) or type(record) ~= "table" then return nil end
-    local ok, value = pcall(function() return record[key] end)
-    return ok and Safe(value) and value or nil
-end
+local Safe, Field, SecretText = addon.Secret.Safe, addon.Secret.Field, addon.Secret.Text
 
 local function Text(value, fallback)
-    if Safe(value) and type(value) == "string" and #value > 0 then
-        return value:sub(1, 130)
-    end
-    return fallback
+    return SecretText(value, 130, true) or fallback
 end
 
 local function EvidenceLabel(value)
@@ -58,6 +47,16 @@ end
 local function Enabled(tab)
     local db = Settings()
     return not db or db[ENABLE_KEYS[tab]] ~= false
+end
+
+local function Visible(tab)
+    if tab == "Today" then return true end
+    local db = Settings()
+    return db ~= nil and db.vignetteRadarAdvancedTools == true
+end
+
+local function Known(tab)
+    return tab == "Today" or ENABLE_KEYS[tab] ~= nil
 end
 
 local function Invoke(target, method, ...)
@@ -213,44 +212,6 @@ local function ResetView(view)
         or "A reset rule never confirms current availability."
 end
 
-local function CollectionView(view)
-    local lens = context.collectionLens
-    if not lens then
-        view.summary = "No Collection Links Available"
-        Add(view, "Unknown", "Reward-source links have not been supplied.")
-        return
-    end
-    local sourceKeys = Field(selection, "sourceKeys") or Field(selection, "sourceKey")
-    if not sourceKeys then
-        view.summary = "Select A Rare Or Treasure"
-        Add(view, "Unknown", "No source selected for reward lookup.")
-        return
-    end
-    local db = Settings() or {}
-    local rewards, linkage = Invoke(lens, "GetRewards", sourceKeys,
-        { hideCollected = db.vignetteRadarCollectionHideCollected == true })
-    view.summary = "Collection Rewards: " .. (type(rewards) == "table" and #rewards or 0)
-    if type(rewards) == "table" then
-        for _, reward in ipairs(rewards) do
-            local category = Text(reward.category, "Reward")
-            local state = reward.status == "collected" and "Collected"
-                or reward.status == "uncollected" and "Uncollected" or "Unknown"
-            local link = EvidenceLabel(reward.linkEvidence)
-            local observed = EvidenceLabel(reward.statusEvidence)
-            Add(view, Text(reward.name, category .. " #" .. tostring(reward.rewardID or "?")),
-                category:sub(1, 1):upper() .. category:sub(2) .. " | " .. state
-                    .. " | Link: " .. link .. " | Status: " .. observed,
-                state == "Uncollected" and "positive" or "muted", reward)
-        end
-    end
-    if #view.rows == 0 then
-        Add(view, "Unknown", linkage == "linked"
-            and "Linked rewards are hidden by the current filter."
-            or "No verified reward-source link for this point.")
-    end
-    view.footer = "Collection status does not prove character loot eligibility."
-end
-
 local function PhaseView(view)
     local lens = context.phaseLens
     local point = Field(selection, "point")
@@ -283,69 +244,61 @@ local function PhaseView(view)
     view.footer = "Absence alone never proves a phase mismatch."
 end
 
-local function ChainView(view)
-    local data = context.chainData
-    local chains = data and data.chains
-    local id = Field(selection, "chainID")
-    if type(chains) ~= "table" then
-        view.summary = "No Verified Quest Chain Data"
-        Add(view, "Unknown", "Prerequisite data has not been supplied.")
+local function TodayFilter()
+    local db = Settings() or {}
+    local value = db.vignetteRadarTodayFilter
+    return TODAY_FILTER_NAMES[value] and value or "left"
+end
+
+local TODAY_STATE = { live = "Up Now", left = "Left", done = "Done This Reset" }
+local function TodayView(view)
+    local today = addon.VignetteRadarToday
+    local data = today and today.Build() or nil
+    if not data or not data.mapID then
+        view.summary = "Today: Zone Unknown"
+        Add(view, "Unknown", "Open the radar in a zone to list its rares and treasures.")
+        view.footer = "Reset times come from the game clock."
         return
     end
-    if not id then
-        view.summary = "Choose A Quest Chain"
-        local db = Settings() or {}
-        local category = db.vignetteRadarQuestChainCategory or "all"
-        for _, chain in ipairs(chains) do
-            if category == "all" or chain.category == category then
-                Add(view, chain.title,
-                    "Source: " .. Text(chain.source, "Unknown") .. " | "
-                        .. (chain.completeGraph and "Prerequisites Known"
-                            or "Prerequisites Incomplete"),
-                    "muted", { chainID = chain.id })
-            end
-        end
-        if #view.rows == 0 then Add(view, "Unknown", "No chain matches this filter.") end
-        view.footer = "Choose a chain to inspect its known steps."
-        return
+    local counts = data.counts
+    view.summary = (data.zone or "This Zone") .. ": " .. counts.rareLeft .. " Rares, "
+        .. counts.treasureLeft .. " Treasures Left"
+    view.footer = "Daily Reset In " .. today.Duration(data.daily) .. "  \194\183  Weekly In "
+        .. today.Duration(data.weekly)
+    local filter, list = TodayFilter(), {}
+    for _, row in ipairs(data.rows) do
+        if filter == "all" or (filter == "done") == (row.state == "done") then list[#list + 1] = row end
     end
-    local chainAPI = addon.VignetteRadarQuestChain
-    if not chainAPI or type(chainAPI.Inspect) ~= "function" then
-        view.summary = "Quest Chain Unavailable"
-        Add(view, "Unknown", "Quest chain inspection is unavailable.")
-        return
+    todayPages = math.max(1, math.ceil(#list / MAX_ROWS))
+    if todayPage > todayPages then todayPage = todayPages end
+    local first = (todayPage - 1) * MAX_ROWS
+    local guidance = addon.VignetteRadarGuidance
+    local dot = "  \194\183  "
+    for index = first + 1, math.min(#list, first + MAX_ROWS) do
+        local row = list[index]
+        local yards = row.yards and guidance and guidance.Yards and guidance.Yards(row.yards) or nil
+        local detail = (row.kind == "rare" and "Rare" or "Treasure") .. dot .. TODAY_STATE[row.state]
+            .. (yards and (dot .. yards) or "")
+            .. (row.state ~= "done" and (dot .. "Click To Route") or "")
+        Add(view, row.name, detail, row.state == "live" and "positive"
+            or row.state == "left" and "caution" or "muted", row.state ~= "done" and row or nil)
     end
-    local inspected = Call(chainAPI.Inspect, data, id,
-        context.getQuestState, context.resolveQuestPoint)
-    if type(inspected) ~= "table" then
-        view.summary = "Unknown Quest Chain"
-        Add(view, "Unknown", "The selected chain is not in the loaded data.")
-        return
+    if #list == 0 then
+        Add(view, filter == "done" and "Nothing Done Yet" or "Nothing Left Here",
+            filter == "done" and "Rares and treasures you finish this reset show here."
+                or "Every known rare and treasure in this zone is done this reset.")
     end
-    view.summary = Text(inspected.title, "Quest Chain")
-    for _, step in ipairs(inspected.steps or {}) do
-        local labels = { complete = "Complete", active = "Active",
-            available = "Available", blocked = "Blocked", unknown = "Unknown" }
-        local state = labels[step.state] or "Unknown"
-        local detail = state .. " | " .. (step.point and "Mapped Location"
-            or "Location Unknown")
-        if step.state == "blocked" and #step.blockedBy > 0 then
-            detail = detail .. " | Requires Quest #" .. step.blockedBy[1]
-        elseif #step.unknownBy > 0 then
-            detail = detail .. " | Prerequisite State Unknown"
-        end
-        Add(view, step.name, detail,
-            step.state == "active" and "positive" or "muted",
-            { step = step, chainView = inspected })
-    end
-    if #view.rows == 0 then Add(view, "Unknown", "No steps supplied.") end
-    view.footer = inspected.prerequisitesKnown
-        and "Only mapped steps can be selected for navigation."
-        or "Prerequisite graph is incomplete; unknown steps remain unknown."
+    if addon.Trace then addon.Trace.Log("today", "view %s filter=%s rows=%d page=%d/%d", tostring(data.mapID),
+        filter, #list, todayPage, todayPages) end
 end
 
 function Intelligence.GetView(tab)
-    tab = ENABLE_KEYS[tab] and tab or currentTab
+    tab = Known(tab) and tab or currentTab
+    if tab == "Today" then
+        local view = { tab = tab, rows = {}, summary = "", footer = "", enabled = true }
+        TodayView(view)
+        return view
+    end
     local view = { tab = tab, rows = {}, summary = "", footer = "", enabled = Enabled(tab) }
     if not view.enabled then
         view.summary = tab .. " Is Disabled"
@@ -354,9 +307,7 @@ function Intelligence.GetView(tab)
     end
     if tab == "Warband" then WarbandView(view)
     elseif tab == "Resets" then ResetView(view)
-    elseif tab == "Collections" then CollectionView(view)
-    elseif tab == "Phase" then PhaseView(view)
-    else ChainView(view) end
+    else PhaseView(view) end
     if view.more then view.footer = "Showing " .. (view.rowLimit or MAX_ROWS) .. " rows; "
         .. view.more .. " more. " .. view.footer end
     return view
@@ -454,7 +405,7 @@ end
 
 local function Label(parent, size, x, y, width, height)
     local text = parent:CreateFontString(nil, "OVERLAY")
-    text:SetFont(FONT, size, "")
+    addon.VignetteRadarStyle.SetFont(text, size, "")
     text:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     text:SetSize(width, height)
     text:SetJustifyH("LEFT")
@@ -466,22 +417,19 @@ local function Cycle(tab)
     local db = Settings()
     if not db then return end
     local key, choices
-    if tab == "Warband" then
+    if tab == "Today" then
+        key, choices = "vignetteRadarTodayFilter", TODAY_FILTERS
+        todayPage = 1
+    elseif tab == "Warband" then
         key, choices = "vignetteRadarWarbandView", { "account", "character" }
     elseif tab == "Resets" then
         key, choices = "vignetteRadarResetCategory", { "all", "daily", "weekly", "one-time" }
-    elseif tab == "Collections" then
-        key = "vignetteRadarCollectionHideCollected"
-        db[key] = db[key] ~= true
-        Intelligence.Refresh()
-        return
-    elseif tab == "Phase" then
-        key, choices = "vignetteRadarPhaseLensAction", { "show", "dim", "hide" }
     else
-        key, choices = "vignetteRadarQuestChainCategory", { "all", "story", "side", "chosen" }
+        key, choices = "vignetteRadarPhaseLensAction", { "show", "dim", "hide" }
     end
     local index = 0
-    for i, value in ipairs(choices) do if db[key] == value then index = i; break end end
+    local current = tab == "Today" and TodayFilter() or db[key]
+    for i, value in ipairs(choices) do if current == value then index = i; break end end
     db[key] = choices[index % #choices + 1]
     if tab == "Phase" and context.phaseLens then
         Invoke(context.phaseLens, "SetOptions", {
@@ -493,22 +441,18 @@ end
 
 local function OptionText(tab)
     local db = Settings() or {}
-    if tab == "Warband" then
+    if tab == "Today" then
+        return "Show: " .. TODAY_FILTER_NAMES[TodayFilter()]
+    elseif tab == "Warband" then
         return "View: " .. (db.vignetteRadarWarbandView == "character"
             and "Character" or "Account")
     elseif tab == "Resets" then
         local value = db.vignetteRadarResetCategory or "all"
         return "Filter: " .. (value == "one-time" and "One-Time"
             or value:sub(1, 1):upper() .. value:sub(2))
-    elseif tab == "Collections" then
-        return db.vignetteRadarCollectionHideCollected and "Show Collected: Off"
-            or "Show Collected: On"
-    elseif tab == "Phase" then
+    else
         local value = db.vignetteRadarPhaseLensAction or "show"
         return "Action: " .. value:sub(1, 1):upper() .. value:sub(2)
-    else
-        local value = db.vignetteRadarQuestChainCategory or "all"
-        return "Filter: " .. value:sub(1, 1):upper() .. value:sub(2)
     end
 end
 
@@ -532,15 +476,15 @@ local function Build()
         UISpecialFrames[#UISpecialFrames + 1] = "VignetteRadarIntelligencePanel"
     end
     panel.title = Label(panel, 13, 18, -12, 405, 18)
-    panel.title:SetText("Intelligence")
-    panel.close = controls.Button(panel, "X", 24, 22)
-    panel.close:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -12, -8)
-    panel.close:SetScript("OnClick", function() Intelligence.Close() end)
+    panel.title:SetText("Today")
+    panel.close = addon.VignetteRadarIconButton.Create(panel, "close", { size = 20,
+        label = "Close Intelligence", onClick = function() Intelligence.Close() end })
+    panel.close:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -12, -9)
     panel.tabs = {}
     for index, tab in ipairs(TABS) do
         local button = controls.Button(panel, tab, 89, 24)
         button:SetPoint("TOPLEFT", panel, "TOPLEFT", 16 + (index - 1) * 96, -43)
-        button:SetScript("OnClick", function() currentTab = tab; Intelligence.Refresh() end)
+        button:SetScript("OnClick", function() currentTab = tab; todayPage = 1; Intelligence.Refresh() end)
         panel.tabs[tab] = button
     end
     panel.headerLine = panel:CreateTexture(nil, "ARTWORK")
@@ -550,6 +494,11 @@ local function Build()
     panel.enable = controls.Button(panel, "Enabled", 92, 24)
     panel.enable:SetPoint("TOPLEFT", panel, "TOPLEFT", 17, -83)
     panel.enable:SetScript("OnClick", function()
+        if currentTab == "Today" then
+            local sweep = addon.VignetteRadarZoneSweep
+            if sweep then sweep.Start() end
+            return
+        end
         Intelligence.SetEnabled(currentTab, not Enabled(currentTab))
     end)
     panel.option = controls.Button(panel, "", 185, 24)
@@ -558,7 +507,10 @@ local function Build()
     panel.extra = controls.Button(panel, "", 174, 24)
     panel.extra:SetPoint("TOPLEFT", panel, "TOPLEFT", 119, -83)
     panel.extra:SetScript("OnClick", function()
-        if currentTab == "Phase" then
+        if currentTab == "Today" then
+            todayPage = todayPage % todayPages + 1
+            Intelligence.Refresh()
+        elseif currentTab == "Phase" then
             local db = Settings()
             if not db then return end
             db.vignetteRadarPhaseHeuristics = db.vignetteRadarPhaseHeuristics ~= true
@@ -568,9 +520,6 @@ local function Build()
                     heuristic = db.vignetteRadarPhaseHeuristics,
                 })
             end
-            Intelligence.Refresh()
-        elseif currentTab == "Quest Chains" then
-            selection.chainID = nil
             Intelligence.Refresh()
         end
     end)
@@ -588,21 +537,14 @@ local function Build()
         row:SetScript("OnClick", function(self)
             local payload = self.payload
             if type(payload) ~= "table" then return end
-            if currentTab == "Resets" and payload.id then
+            if currentTab == "Today" then
+                local today = addon.VignetteRadarToday
+                if today then today.Route(payload) end
+            elseif currentTab == "Resets" and payload.id then
                 selection.goalKey = payload.id
                 selection.goalName = payload.name
                 resetActionMessage = nil
                 Intelligence.Refresh()
-            elseif payload.chainID then
-                selection.chainID = payload.chainID
-                Intelligence.Refresh()
-            elseif payload.step and payload.step.point
-                and type(context.onSelectStep) == "function" then
-                local chainAPI = addon.VignetteRadarQuestChain
-                local chosen = chainAPI and chainAPI.SelectMappedStep
-                    and Call(chainAPI.SelectMappedStep,
-                        payload.chainView, payload.step.questID)
-                if chosen then Call(context.onSelectStep, chosen) end
             end
         end)
         row:SetScript("OnEnter", function(self)
@@ -650,7 +592,8 @@ function Intelligence.Refresh()
     panel.footer:SetTextColor(.57, .69, .72)
     panel.footer:SetText(view.footer)
     panel.summary:SetText(view.summary)
-    panel.enable:SetText(view.enabled and "Enabled" or "Disabled")
+    panel.title:SetText(currentTab == "Today" and "Today" or "Intelligence")
+    panel.enable:SetText(currentTab == "Today" and "Sweep Zone" or view.enabled and "Enabled" or "Disabled")
     panel.option:SetText(OptionText(currentTab))
     panel.option:SetEnabled(view.enabled)
     local selectedKey = Field(selection, "goalKey")
@@ -670,21 +613,31 @@ function Intelligence.Refresh()
         end
         if currentTab == "Resets" then button:Show() else button:Hide() end
     end
-    if currentTab == "Phase" then
+    if currentTab == "Today" then
+        panel.extra:SetText("Page " .. todayPage .. " Of " .. todayPages)
+        panel.extra:SetEnabled(todayPages > 1)
+        if todayPages > 1 then panel.extra:Show() else panel.extra:Hide() end
+    elseif currentTab == "Phase" then
         local db = Settings() or {}
         panel.extra:SetText(db.vignetteRadarPhaseHeuristics == true
             and "Heuristic: On" or "Heuristic: Off")
         panel.extra:SetEnabled(view.enabled)
         panel.extra:Show()
-    elseif currentTab == "Quest Chains" and selection.chainID then
-        panel.extra:SetText("All Chains")
-        panel.extra:SetEnabled(view.enabled)
-        panel.extra:Show()
     else
         panel.extra:Hide()
     end
-    for tab, button in pairs(panel.tabs) do
+    local slot = 0
+    for _, tab in ipairs(TABS) do
+        local button = panel.tabs[tab]
         if tab == currentTab then button:LockHighlight() else button:UnlockHighlight() end
+        -- Without Advanced Tools only Today shows, and alone it needs no tab.
+        if Visible(tab) and Visible("Warband") then
+            button:SetPoint("TOPLEFT", panel, "TOPLEFT", 16 + slot * 96, -43)
+            slot = slot + 1
+            button:Show()
+        else
+            button:Hide()
+        end
     end
     for i, row in ipairs(panel.rows) do
         local data = view.rows[i]
@@ -706,7 +659,10 @@ function Intelligence.Refresh()
 end
 
 function Intelligence.Open(tab)
-    if ENABLE_KEYS[tab] then currentTab = tab end
+    -- An explicit tab opens as asked; the default falls back to Today.
+    if Known(tab) then currentTab = tab
+    elseif not Visible(currentTab) then currentTab = "Today" end
+    todayPage = 1
     local frame = Build()
     if not frame then return false, "UI controls unavailable" end
     frame:Show()
@@ -728,4 +684,11 @@ end
 
 function Intelligence.IsOpen()
     return panel ~= nil and panel:IsShown()
+end
+
+-- Today follows the radar's scans while it is open (at most every 2 s).
+if addon.Bus and addon.Bus.On then
+    addon.Bus.On("POINTS_CHANGED", function()
+        if currentTab == "Today" and panel and panel:IsShown() then Intelligence.Refresh() end
+    end, { coalesce = 2 })
 end

@@ -62,6 +62,16 @@ assert(bridge.StartObjectiveRoute() and bridge.IsFollowing()
 local goals = bridge.Goals()
 assert(#goals == 2 and goals[1].mapped and not goals[1].complete
     and goals[2].complete, "picker rows should show mapped objectives and completion")
+do
+    -- The Guide Panel's step text: the goal Zygor points at, else the first open one.
+    local step = ZygorGuidesViewer.CurrentStep
+    assert(bridge.StepText() == "Find the chest", "the selected goal is the step text")
+    step.current_waypoint_goal_num = nil
+    step.goals[1].status, step.goals[2].status = "complete", "incomplete"
+    assert(bridge.StepText() == "Collect the key", "without a selected goal: the first goal not done")
+    step.current_waypoint_goal_num = 1
+    step.goals[1].status, step.goals[2].status = "incomplete", "complete"
+end
 assert(bridge.Pin("objective", 2) and pinned[#pinned].name == "Collect the key",
     "an explicit picker choice should pin the selected goal")
 bridge.PauseForManual("Manual waypoint selected")
@@ -71,4 +81,21 @@ handlers.ZGV_STEP_CHANGED()
 assert(#timers == 2, "paused follow should ignore guide events")
 assert(bridge.ToggleFollow() and bridge.IsFollowing(),
     "resuming should restore guide follow")
+-- A viewer that fails partway must not keep the handlers already added.
+local added, adds = {}, 0
+ZygorGuidesViewer = {
+    CurrentGuide = ZygorGuidesViewer.CurrentGuide,
+    CurrentStep = ZygorGuidesViewer.CurrentStep,
+    AddMessageHandler = function(_, event, fn)
+        adds = adds + 1
+        if adds == 2 then error("handler table locked") end
+        added[event] = fn
+    end,
+    RemoveMessageHandler = function(_, event, fn)
+        if added[event] == fn then added[event] = nil end
+    end,
+}
+assert(not bridge.Bind(function() end, function() end, function() return 123 end,
+    function() end), "a failed subscription must report failure")
+assert(next(added) == nil, "handlers added before the failure must be removed")
 io.write("vignette radar Zygor tests passed\n")

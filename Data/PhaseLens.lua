@@ -10,26 +10,11 @@ local MAX_POINTS, MAX_CONDITIONS, MAX_OBSERVED_QUESTS = 256, 8, 16
 local ACTIONS = { show=true, dim=true, hide=true }
 local EVIDENCE = { bundled=true, ["trusted-pack"]=true, manual=true }
 
-local function Safe(value)
-    if type(issecretvalue) ~= "function" then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and secret ~= true
-end
-
-local function Field(value, key)
-    if not Safe(value) or type(value) ~= "table" then return nil end
-    local ok, result = pcall(function() return value[key] end)
-    if ok and Safe(result) then return result end
-end
+local Safe, Field, Text = addon.Secret.Safe, addon.Secret.Field, addon.Secret.Text
 
 local function ID(value)
     return Safe(value) and type(value) == "number" and value > 0
         and value <= 100000000 and value == math.floor(value) and value or nil
-end
-
-local function Text(value, limit)
-    return Safe(value) and type(value) == "string" and #value > 0
-        and #value <= limit and value or nil
 end
 
 local function Time(value)

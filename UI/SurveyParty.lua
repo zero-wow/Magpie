@@ -5,7 +5,6 @@ local API = {}
 addon.VignetteRadarSurveyParty = API
 
 local WIDTH, HEIGHT = 400, 488
-local FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
 local CELL_SIZES = { .02, .025, .05 }
 local RECEIVE = { "off", "party", "raid" }
 local panel, activePage, statusMessage, replayPage = nil, "Survey", nil, 1
@@ -37,7 +36,7 @@ end
 
 local function Label(parent, title, size, x, y, width, color)
     local label = parent:CreateFontString(nil, "OVERLAY")
-    label:SetFont(FONT, size or 11, "")
+    addon.VignetteRadarStyle.SetFont(label, size or 11, "")
     label:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     label:SetSize(width or (WIDTH - x - 14), size + 7)
     label:SetJustifyH("LEFT")
@@ -258,9 +257,9 @@ local function BuildSurvey(page)
         API.ViewCoverage()
     end)
     Label(page, "Visited cells are observations, not proof of a hidden treasure.",
-        10, 16, -285, 370, { .57, .68, .71 })
+        9, 16, -285, 370, { .57, .68, .71 })
     page.note = Label(page, "Survey samples only while moving. Teleports do not paint the path.",
-        10, 16, -320, 370, { .57, .68, .71 })
+        9, 16, -320, 370, { .57, .68, .71 })
 end
 
 local function BuildReplay(page)
@@ -276,7 +275,7 @@ local function BuildReplay(page)
     page.input:SetPoint("TOPLEFT", page, "TOPLEFT", 14, -117)
     page.input:SetAutoFocus(false)
     page.input:SetMaxLetters(80)
-    page.input:SetFont(FONT, 11, "")
+    addon.VignetteRadarStyle.SetFont(page.input, 11, "")
     page.input:SetTextInsets(8, 8, 0, 0)
     page.input:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8X8",
@@ -409,7 +408,9 @@ local function Build()
         UISpecialFrames[#UISpecialFrames + 1] = "VignetteRadarSurveyPartyPanel"
     end
     panel.title = Label(panel, "FIELD INTELLIGENCE", 13, 16, -12, 310)
-    panel.close = Button(panel, "Close", 334, -9, 51, function() panel:Hide() end)
+    panel.close = addon.VignetteRadarIconButton.Create(panel, "close", { size = 20,
+        label = "Close", onClick = function() panel:Hide() end })
+    panel.close:SetPoint("TOPLEFT", panel, "TOPLEFT", 365, -11)
     panel.tabs, panel.pages = {}, {}
     for index, name in ipairs({ "Survey", "Replay", "Party" }) do
         local tab = Button(panel, name, 14 + (index-1)*125, -44, 118, function()

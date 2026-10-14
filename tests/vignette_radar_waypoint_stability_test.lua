@@ -24,6 +24,9 @@ C_Navigation = {
     GetDistance = function() return 1000 end,
 }
 CreateFrame = function() return Frame() end
+local clock = 1
+GetTime = function() return clock end
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile("Routes/WaypointStability.lua"))("VignetteRadar", addon)
 local stability = addon.VignetteRadarWaypointStability
 assert(stability.Enable())
@@ -33,9 +36,21 @@ assert(proxy and proxy ~= nav and proxy.offsetX == 100
     and WUIPinpointFrame.relative == proxy,
     "our waypoint pylon and label should share a smoothed display anchor")
 nav.x = 700
+clock = 2
 WUIWaypointFrame.onUpdate(WUIWaypointFrame, .05)
-assert(proxy.offsetX > 100 and proxy.offsetX < 200,
-    "a distant pylon jump should ease instead of moving in one frame")
+assert(proxy.offsetX == 200,
+    "a fast move (a Skyriding surge) must be followed in the same frame, never trail")
+nav.x = 700.8
+clock = 3
+local proxySetPoint, proxyMoves = proxy.SetPoint, 0
+proxy.SetPoint = function(...) proxyMoves = proxyMoves + 1; return proxySetPoint(...) end
+WUIWaypointFrame.onUpdate(WUIWaypointFrame, .05)
+assert(proxy.offsetX == 200, "sub-pixel jitter must be held back")
+assert(proxyMoves == 0, "an unchanged proxy position must not be re-anchored")
+proxy.SetPoint = proxySetPoint
+nav.x = 760
+WUIPinpointFrame.onUpdate(WUIPinpointFrame, .05)
+assert(proxy.offsetX == 200, "the second WaypointUI frame must not update twice in one frame")
 stability.Disable()
 assert(WUIWaypointFrame.relative == nav and WUIPinpointFrame.relative == nav,
     "clearing our waypoint should restore WaypointUI's own anchors")

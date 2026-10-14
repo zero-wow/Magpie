@@ -10,15 +10,9 @@ local MAX_SOURCES, MAX_POINTS, MAX_CANDIDATES = 8, 2048, 48
 local MAX_SNAPSHOTS, CACHE_SECONDS = 32, 30
 local snapshots, snapshotOrder = {}, {}
 
-local function Safe(value)
-    return not (type(issecretvalue) == "function" and issecretvalue(value))
-end
-
-local function Field(value, key)
-    if not Safe(value) or type(value) ~= "table" then return nil end
-    local ok, result = pcall(function() return value[key] end)
-    return ok and Safe(result) and result or nil
-end
+local Safe, Field = addon.Secret.Safe, addon.Secret.Field
+local IDs = addon.VignetteRadarPoints.IDs
+local ID_FIELDS = addon.VignetteRadarPoints.ID_FIELDS
 
 local function Finite(value)
     return Safe(value) and type(value) == "number" and value == value
@@ -35,22 +29,14 @@ local function Name(value)
     return result
 end
 
-local function Identity(point)
-    local ids = {}
-    for _, field in ipairs({ "npcID", "objectID", "questID" }) do
-        local id = tonumber(Field(point, field))
-        if id and id > 0 and id == math.floor(id) then ids[field] = id end
-    end
-    return ids
-end
-
 local function Compatible(a, b)
     if a.mapID ~= b.mapID or a.kind ~= b.kind then return false end
     if a.instanceID and b.instanceID and a.instanceID ~= b.instanceID then return false end
     if a.source == b.source then return false end
     local ai, bi = a._identity, b._identity
     local matchedID = false
-    for _, field in ipairs({ "npcID", "objectID", "questID" }) do
+    for index = 1, #ID_FIELDS do
+        local field = ID_FIELDS[index]
         local left, right = ai[field], bi[field]
         if left and right then
             if left ~= right then return false end
@@ -84,7 +70,7 @@ local function Point(entry)
         evidence = Field(entry, "evidence") or "saved",
         _original = entry,
     }
-    point._name, point._identity = Name(point.name), Identity(point)
+    point._name, point._identity = Name(point.name), IDs(point)
     return point
 end
 

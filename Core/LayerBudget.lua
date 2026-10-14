@@ -16,6 +16,8 @@ local definitions = {
         intervals = { 0, .25, .50, 1.00 } },
     trail = { label = "trail", high = 3, single = 45,
         intervals = { 0, .40, .80, 1.50 } },
+    constellation = { label = "constellation", high = 12, single = 45,
+        intervals = { 0, .05, .10, .20 } },
 }
 
 local states = {}
@@ -45,9 +47,9 @@ local function Announce(state, restored)
     local chat = DEFAULT_CHAT_FRAME
     if not (chat and type(chat.AddMessage) == "function") then return end
     if restored then
-        chat:AddMessage("Vignette Radar restored normal " .. state.config.label .. " updates.")
+        chat:AddMessage("Magpie restored normal " .. state.config.label .. " updates.")
     else
-        chat:AddMessage("Vignette Radar reduced " .. state.config.label
+        chat:AddMessage("Magpie reduced " .. state.config.label
             .. " update frequency after high CPU use; it will restore automatically.")
     end
 end
@@ -95,7 +97,24 @@ end
 function API.Begin(name, force)
     local state = State(name)
     if not state then return nil end
-    if state.running or not API.ShouldRun(name, force) then return nil end
+    if state.running then
+        -- An error between Begin and Finish skipped Finish. Drop the stale run
+        -- (and any layers still nested inside it) so the layer is not dead
+        -- until /reload.
+        local stale = active
+        while stale and stale ~= state do stale = stale.parent end
+        if stale then
+            local node = active
+            while node and node ~= state do
+                local parent = node.parent
+                node.running, node.parent, node.started, node.child = false, nil, nil, 0
+                node = parent
+            end
+            active = state.parent
+        end
+        state.running, state.parent, state.started, state.child = false, nil, nil, 0
+    end
+    if not API.ShouldRun(name, force) then return nil end
     state.started, state.child, state.parent = Profile(), 0, active
     state.running = true
     active = state
@@ -136,7 +155,7 @@ end
 
 function API.StatusLine()
     local parts = {}
-    for _, name in ipairs({ "render", "questBlobs", "mapNotes", "trail" }) do
+    for _, name in ipairs({ "render", "questBlobs", "mapNotes", "trail", "constellation" }) do
         local state = State(name)
         parts[#parts + 1] = state.config.label .. " " .. tostring(math.floor(state.recent + .5)) .. "ms/s"
             .. (state.level > 0 and " (reduced)" or "")

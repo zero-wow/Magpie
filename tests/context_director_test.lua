@@ -1,4 +1,5 @@
 local addon = {}
+assert(loadfile("Core/Secret.lua"))("VignetteRadar", addon)
 assert(loadfile(arg[1] or "Core/ContextDirector.lua"))("VignetteRadar", addon)
 local D = addon.VignetteRadarContextDirector
 local writes, current = 0, nil
@@ -33,4 +34,12 @@ d:Configure({ enabled = true, contexts = { cave = { enabled = true, range = 80 }
 _, status = d:Update({ cave = true }, 15, apply)
 assert(status == "applied" and current.range == 80, "preset changes must reapply")
 assert(writes < 10, "context changes must be sparse")
+local revision = d.revision
+d:Configure({ enabled = true, contexts = { cave = { enabled = true, range = 80 } } })
+assert(d.revision == revision, "identical settings must not bump the revision")
+_, status = d:Update({ cave = true }, 16, apply)
+assert(status == "unchanged", "identical settings must not reapply")
+d:Configure({ enabled = true, contexts = { cave = { enabled = true, range = 90,
+    filters = { rare = true } } } })
+assert(d.revision == revision + 1, "changed settings must bump the revision")
 print("context_director_test: ok")

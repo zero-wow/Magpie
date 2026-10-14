@@ -12,33 +12,16 @@ local SAMPLE_SECONDS, REPLAY_SECONDS, REPLAY_SAMPLE_SECONDS = 3, 1800, 10
 local CELL_SIZE = .025
 local CELL_SIZES = { [.02]=true, [.025]=true, [.05]=true }
 local store, coverage = nil, {}
+-- character|mapID|size|cell -> entry, so a revisit needs no scan.
+local coverageIndex = {}
 local character = "player"
 local surveying, recording = false, false
 local lastSurveyAt, lastPosition, lastReplayAt, lastReplayPosition = nil, nil, nil, nil
 local timeline = {}
 local dirty = false
 
-local function Safe(value)
-    if type(issecretvalue) ~= "function" then return true end
-    local ok, secret = pcall(issecretvalue, value)
-    return ok and secret ~= true
-end
-
-local function Field(object, key)
-    if not Safe(object) or type(object) ~= "table" then return nil end
-    local ok, value = pcall(function() return object[key] end)
-    return ok and Safe(value) and value or nil
-end
-
-local function Number(value)
-    return Safe(value) and type(value) == "number" and value == value
-        and value ~= math.huge and value ~= -math.huge and value or nil
-end
-
-local function Integer(value, low, high)
-    value = Number(value)
-    return value and value == math.floor(value) and value >= low and value <= high and value or nil
-end
+local Safe, Field = addon.Secret.Safe, addon.Secret.Field
+local Number, Integer = addon.Secret.Number, addon.Secret.Integer
 
 local function Label(value, maxLength)
     if not Safe(value) or type(value) ~= "string" or #value == 0 or #value > maxLength then return nil end
@@ -77,42 +60,79 @@ local function Cell(point)
     return x .. ":" .. y
 end
 
-local function TrimCoverage()
-    while #coverage > MAX_CELLS do table.remove(coverage, 1) end
-    local zones, seenZones = 0, {}
-    for index = #coverage, 1, -1 do
+local function CoverageKey(entry)
+    return entry.character .. "|" .. entry.mapID .. "|" .. entry.size .. "|" .. entry.cell
+end
+
+local function IndexCoverage()
+    coverageIndex = {}
+    for index = 1, #coverage do
         local entry = coverage[index]
-        local zone = entry.character .. ":" .. entry.mapID
-        if not seenZones[zone] then
-            seenZones[zone] = true
-            zones = zones + 1
-        end
-        if zones > MAX_ZONES then table.remove(coverage, index) end
+        coverageIndex[CoverageKey(entry)] = entry
     end
-    local characters, seenCharacters = 0, {}
-    for index = #coverage, 1, -1 do
-        local who = coverage[index].character
-        if not seenCharacters[who] then seenCharacters[who] = true; characters = characters + 1 end
-        if characters > MAX_CHARACTERS then table.remove(coverage, index) end
+end
+
+-- Newest entries decide which zones and characters stay. A kept zone keeps
+-- all of its cells, older ones too. Survivors are compacted in one pass.
+local function TrimCoverage()
+    local count = #coverage
+    local first = math.max(1, count - MAX_CELLS + 1)
+    local keepZone, keepWho = {}, {}
+    local zones, characters = 0, 0
+    for index = count, first, -1 do
+        local entry = coverage[index]
+        local who, mapID = entry.character, entry.mapID
+        local whoZones = keepZone[who]
+        if not whoZones then whoZones = {}; keepZone[who] = whoZones end
+        local keep = whoZones[mapID]
+        if keep == nil then
+            zones = zones + 1
+            keep = zones <= MAX_ZONES
+            whoZones[mapID] = keep
+        end
+        -- The character cap counts only entries that survive the zone cap.
+        if keep and keepWho[who] == nil then
+            characters = characters + 1
+            keepWho[who] = characters <= MAX_CHARACTERS
+        end
+    end
+    local write = 0
+    for index = 1, count do
+        local entry = coverage[index]
+        coverage[index] = nil
+        local whoZones = index >= first and keepZone[entry.character]
+        if whoZones and whoZones[entry.mapID] and keepWho[entry.character] then
+            write = write + 1
+            coverage[write] = entry
+        else
+            local key = CoverageKey(entry)
+            if coverageIndex[key] == entry then coverageIndex[key] = nil end
+        end
     end
 end
 
 local function AddCoverage(who, point, at)
     local key = Cell(point)
-    for index = #coverage, 1, -1 do
-        local entry = coverage[index]
-        if entry.character == who and entry.mapID == point.mapID
-            and entry.size == CELL_SIZE and entry.cell == key then
-            -- Recency controls pruning; revisits do not grow storage.
-            table.remove(coverage, index)
-            entry.at = at
+    local indexKey = who .. "|" .. point.mapID .. "|" .. CELL_SIZE .. "|" .. key
+    local entry = coverageIndex[indexKey]
+    if entry then
+        -- Recency controls pruning; revisits do not grow storage.
+        entry.at = at
+        if coverage[#coverage] ~= entry then
+            for index = #coverage - 1, 1, -1 do
+                if coverage[index] == entry then
+                    table.remove(coverage, index)
+                    break
+                end
+            end
             coverage[#coverage+1] = entry
-            dirty = true
-            return false
         end
+        dirty = true
+        return false
     end
-    coverage[#coverage+1] = { character=who, mapID=point.mapID,
-        cell=key, size=CELL_SIZE, at=at }
+    entry = { character=who, mapID=point.mapID, cell=key, size=CELL_SIZE, at=at }
+    coverage[#coverage+1] = entry
+    coverageIndex[indexKey] = entry
     TrimCoverage()
     dirty = true
     return true
@@ -170,8 +190,9 @@ function API.Initialize(saved, who)
                 coverage[#coverage+1] = { character=c, mapID=m, cell=key, size=size, at=at }
             end
         end
-        TrimCoverage()
     end
+    IndexCoverage()
+    TrimCoverage()
     -- Normalize old or imported snapshots once, before they can accumulate.
     if store and type(Field(store, "replays")) == "table" then
         store.replays = API.GetSavedReplays()
@@ -347,6 +368,7 @@ function API.ClearCoverage(mapID, shared)
             removed = true
         end
     end
+    if removed then IndexCoverage() end
     dirty = dirty or removed
     return removed
 end
